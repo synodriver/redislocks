@@ -12,7 +12,7 @@ from redis.asyncio import Redis
 
 
 class NotAvailable(Exception):
-    """Raised when unable to aquire the Semaphore in non-blocking mode"""
+    """Raised when unable to acquire the Semaphore in non-blocking mode"""
 
 
 class Semaphore:
