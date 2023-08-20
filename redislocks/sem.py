@@ -10,9 +10,7 @@ from typing import Awaitable, Callable, Optional, Union
 
 from redis.asyncio import Redis
 
-
-class NotAvailable(Exception):
-    """Raised when unable to acquire the Semaphore in non-blocking mode"""
+from redislocks.exceptions import NotAvailable
 
 
 class Semaphore:
@@ -28,7 +26,7 @@ class Semaphore:
         self,
         value: int,
         client: Optional[Redis] = None,
-        namespace: Optional[str] = None,  # 区分不同的锁
+        namespace: str = "SEMAPHORE",  # 区分不同的锁
         stale_client_timeout: Optional[float] = None,
         blocking: bool = True,
     ):
@@ -36,7 +34,7 @@ class Semaphore:
         if value < 1:
             raise ValueError("Semaphore initial value must be >= 0")
         self.value = value
-        self.namespace = namespace if namespace else "SEMAPHORE"
+        self.namespace = namespace
         self.stale_client_timeout = stale_client_timeout
         self.is_use_local_time = False
         self.blocking = blocking
