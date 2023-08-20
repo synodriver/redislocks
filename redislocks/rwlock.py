@@ -8,6 +8,16 @@ from typing import Literal, Optional, Union
 from redis.asyncio import Redis
 
 
+class _InternalLockCategory:
+    write_lock_list = "write_lock_list"
+    read_lock_list = "read_lock_list"
+
+
+class _RedisEventCategory:
+    expired = b"expired"
+    incrby = b"incrby"
+
+
 class RWLock:
     def __init__(
         self,
@@ -16,30 +26,20 @@ class RWLock:
     ):
         self.client = client or Redis()
         self.is_use_local_time = False
-        self.namespace = namespace or "DEFAULT"
-
-    class _InternalLockCategory:
-        WriteLockList = "write_lock_list"
-        ReadLockList = "read_lock_list"
-
-    class _RedisEventCategory:
-        Expired = bytes("expired", encoding="utf8")
-        Incrby = bytes("incrby", encoding="utf8")
+        self.namespace = namespace or "RWLOCK"
 
     # 目前只实现了写锁
     async def acquire(self, mode: Literal["r", "w"] = "r") -> Union[str, bytes]:
         write_lock_list_name = self._get_key_string(
-            RWLock._InternalLockCategory.WriteLockList
+            _InternalLockCategory.write_lock_list
         )
-        read_lock_list_name = self._get_key_string(
-            RWLock._InternalLockCategory.ReadLockList
-        )
+        read_lock_list_name = self._get_key_string(_InternalLockCategory.read_lock_list)
 
         write_lock_keyspace_name = self._get_keyspace_name(
-            RWLock._InternalLockCategory.WriteLockList
+            _InternalLockCategory.write_lock_list
         )
         read_lock_keyspace_name = self._get_keyspace_name(
-            RWLock._InternalLockCategory.ReadLockList
+            _InternalLockCategory.read_lock_list
         )
 
         while True:
@@ -47,51 +47,53 @@ class RWLock:
             # 先检查是否有读锁存在，如果有读锁，则预先抢占写锁并不设置超时
             # 否则直接开始获取写锁
             catch = 0
-            with self.client.pubsub() as pub_sub:
+            async with self.client.pubsub() as pub_sub:
                 # 先 sub 对应的读锁事件，检查是否存在读锁被获取的情况
                 pub_sub.subscribe(read_lock_keyspace_name)
                 reading_count = self.client.get(read_lock_list_name) or 0
                 if reading_count > 0:
                     # 若不存在则开始抢占写锁，拒绝新读锁的进入（逻辑上）
-                    catch = self.client.set(write_lock_list_name, 1, nx=True)
+                    catch = await self.client.set(write_lock_list_name, 1, nx=True)
 
                     # 等待读锁全部释放
-                    for event in pub_sub.listen():
+                    async for event in pub_sub.listen():
                         print(event)
-                        if event["data"] == RWLock._RedisEventCategory.Incrby:
+                        if (
+                            event["data"] == _RedisEventCategory.incrby
+                        ):  # todo ensure_bytes
                             reading_count = (
-                                self.client.get(
-                                    RWLock._InternalLockCategory.WriteLockList
+                                await self.client.get(
+                                    _InternalLockCategory.write_lock_list
                                 )
                                 or 0
                             )
                             if not reading_count:
                                 break
-                        elif event["data"] == RWLock._RedisEventCategory.Expired:
+                        elif event["data"] == _RedisEventCategory.expired:
                             ...
                 else:
                     ...
 
             # 获取写锁，如果上面 catch 到了则这里返回 0
-            is_existing = self.client.set(
+            is_existing = await self.client.set(
                 write_lock_list_name, 1, px=timedelta(milliseconds=500000), nx=True
             )
             if not catch and not is_existing:
                 pub_sub = self.client.pubsub()
-                pub_sub.subscribe(
-                    self._get_keyspace_name(RWLock._InternalLockCategory.WriteLockList)
+                await pub_sub.subscribe(
+                    self._get_keyspace_name(_InternalLockCategory.write_lock_list)
                 )
 
                 # 等待读锁释放（过期释放）
                 # TODO 补充主动删除事件
-                for event in pub_sub.listen():
+                async for event in pub_sub.listen():
                     print(event)
-                    if event["data"] == RWLock._RedisEventCategory.Expired:
+                    if event["data"] == _RedisEventCategory.expired:
                         print("enter event")
                         break
             elif catch:
                 # 重置一下过期时间
-                self.client.set(
+                await self.client.set(
                     write_lock_list_name, 1, px=timedelta(milliseconds=500000)
                 )
                 return "1"
@@ -105,10 +107,13 @@ class RWLock:
         return "{}:{}".format(self.namespace, category)
 
     def _get_keyspace_name(self, category) -> str:
-        return "__keyspace@0__:{}:{}".format(self.namespace, category)
+        return "__keyspace@{}__:{}:{}".format(self._get_db(), self.namespace, category)
 
     async def _get_expire_time(self) -> int:
         return await self.client.time() + 3
+
+    def _get_db(self) -> int:
+        return self.client.get_connection_kwargs()["db"]
 
     @property
     async def current_time(self):
