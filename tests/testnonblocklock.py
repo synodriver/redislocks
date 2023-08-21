@@ -57,3 +57,7 @@ class TestLock(IsolatedAsyncioTestCase):
             await self.lock2.acquire("w")
         await self.lock1.release("r")
         print(await self.client.keys("*"))
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

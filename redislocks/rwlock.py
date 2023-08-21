@@ -83,6 +83,14 @@ class RWLock:
         if old_key:
             return False
 
+    async def clear(self):
+        await self.client.delete(self.check_exists_key, self.read_key, self.write_key, self.write_waiter_key)
+
+    async def release_all(self):
+        for _ in range(len(self._local_readtokens)):
+            await self.release("r")
+        if self._local_writetoken is not None:
+            await self.release("w")
     def _get_db(self) -> int:
         return self.client.get_connection_kwargs()["db"]
 

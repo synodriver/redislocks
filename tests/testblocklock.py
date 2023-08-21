@@ -33,6 +33,9 @@ class TestLock(IsolatedAsyncioTestCase):
         self.assertFalse(await self.lock1.have_lock("r"))
         print(await self.client.keys("*"))
         self.assertFalse(await self.lock2.have_lock("r"))
+        await self.lock1.acquire("w")
+        self.assertTrue(await self.lock1.have_lock("w"))
+        await self.lock1.release("w")
         await self.delkeys()
 
     async def test_read_read(self):
@@ -126,3 +129,7 @@ class TestLock(IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.TimeoutError):  # 此时也不能加读锁了
             await asyncio.wait_for(self.lock2.acquire("r"), 1)
         await self.delkeys()
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

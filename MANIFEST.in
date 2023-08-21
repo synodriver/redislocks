@@ -1,0 +1,4 @@
+include redislocks/py.typed
+include redislocks/*.lua
+recursive-include redislocks
+include README.markdown

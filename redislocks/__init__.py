@@ -5,4 +5,4 @@ from redislocks.sem import Semaphore
 from redislocks.rwlock import RWLock
 from redislocks.exceptions import NotAvailable
 
-__version__ = "0.0.1"
+__version__ = "0.0.1dev1"
