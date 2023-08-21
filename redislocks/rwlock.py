@@ -194,7 +194,7 @@ class RWLock:
                 f"__keyspace@{self._get_db()}__:{self.write_key}",
             )
             async for event in pubsub.listen():
-                print(event)
+                # print(event)
                 if (
                     ensure_str(event["type"]) == "message"
                     and ensure_str(event["channel"])
