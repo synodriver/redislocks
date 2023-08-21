@@ -100,7 +100,7 @@ class Semaphore:
                 await self.client.hgetall(self.grabbed_key)
             ).items():
                 timed_out_at = float(looked_at) + self.stale_client_timeout
-                if timed_out_at < await self.current_time:
+                if timed_out_at < float(await self.current_time):
                     await self.signal(token)
         finally:
             await self.client.delete(self.check_release_locks_key)
@@ -159,10 +159,10 @@ class Semaphore:
         return getattr(self, key_name)
 
     @property
-    async def current_time(self):
-        if self.is_use_local_time:
-            return time.time()
-        return float(".".join(map(str, await self.client.time())))
+    async def current_time(self) -> str:
+        # if self.is_use_local_time:
+        #     return time.time()
+        return ".".join(map(str, await self.client.time()))
 
     async def __aenter__(self):
         await self.acquire()

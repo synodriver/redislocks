@@ -12,7 +12,7 @@ if redis.call("EXISTS", write_key) == 1 or redis.call("LLEN", write_waiter_key) 
     return 0 -- 直接加锁失败，此时，如果是阻塞模式，开始监听keyspace
 else
     local time = redis.call("TIME")
-    local timestring = time[1] .. time[2] -- string
-    redis.call("RPUSH", read_key, timestring)
-    return 1
+    local timestring = time[1] ..".".. time[2] -- string
+    redis.call("SADD", read_key, timestring)
+    return timestring -- 成功就返回时间戳
 end
