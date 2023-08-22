@@ -3,7 +3,6 @@
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
-import time
 
 # __version_info__ = ("0", "2", "2")
 from typing import Awaitable, Callable, Optional, Union
@@ -54,6 +53,10 @@ class Semaphore:
             pipe.rpush(self.available_key, *range(self.value))
             await pipe.execute()
         await self.client.persist(self.check_exists_key)
+
+    async def release_all(self):
+        for _ in range(len(self._local_tokens)):
+            await self.release()
 
     @property
     async def available_count(self):
@@ -108,14 +111,24 @@ class Semaphore:
     async def _is_locked(self, token):
         return await self.client.hexists(self.grabbed_key, token)
 
-    async def has_lock(self):
+    @property
+    def num_tokens(self):
+        return len(self._local_tokens)
+
+    async def has_token(self) -> bool:
+        """当前信号量拥有至少一个token时返回True"""
         for t in self._local_tokens:
             if await self._is_locked(t):
                 return True
         return False
 
+    async def locked(self) -> bool:
+        """如果信号量不能被立刻获取返回True"""
+        grabbed: int = await self.client.hlen(self.grabbed_key)
+        return True if grabbed == self.value else False
+
     async def release(self):
-        if not await self.has_lock():
+        if not await self.has_token():
             return False
         return await self.signal(self._local_tokens.pop())
 

@@ -5,9 +5,10 @@ import asyncio
 import os
 from unittest import IsolatedAsyncioTestCase
 
-from redis.asyncio import Redis
-from redislocks import RWLock
 from dotenv import load_dotenv
+from redis.asyncio import Redis
+
+from redislocks import RWLock
 
 load_dotenv("./.env")
 
@@ -25,16 +26,20 @@ class TestLock(IsolatedAsyncioTestCase):
 
     async def test_havelock(self):
         await self.lock1.acquire("r")
-        self.assertTrue(await self.lock1.have_lock("r"))
+        self.assertTrue(await self.lock1.has_token("r"))
+        self.assertTrue(await self.lock2.locked("w"))
+        self.assertFalse(await self.lock2.locked("r"))
         await self.lock1.acquire("r")
-        self.assertTrue(await self.lock1.have_lock("r"))
+        self.assertTrue(await self.lock1.has_token("r"))
         await self.lock1.release("r")
         await self.lock1.release("r")
-        self.assertFalse(await self.lock1.have_lock("r"))
+        self.assertFalse(await self.lock1.has_token("r"))
+        self.assertFalse(await self.lock2.locked("r"))
+        self.assertFalse(await self.lock2.locked("w"))
         print(await self.client.keys("*"))
-        self.assertFalse(await self.lock2.have_lock("r"))
+        self.assertFalse(await self.lock2.has_token("r"))
         await self.lock1.acquire("w")
-        self.assertTrue(await self.lock1.have_lock("w"))
+        self.assertTrue(await self.lock1.has_token("w"))
         await self.lock1.release("w")
         await self.delkeys()
 
@@ -48,9 +53,15 @@ class TestLock(IsolatedAsyncioTestCase):
 
     async def test_write_write(self):
         await self.lock1.acquire("w")
+        self.assertTrue(await self.lock2.locked("w"))
+        self.assertTrue(await self.lock2.locked("r"))
         with self.assertRaises(asyncio.TimeoutError):
-            await asyncio.wait_for(self.lock2.acquire("w"), 1)
+            await asyncio.wait_for(
+                self.lock2.acquire("w"), 1
+            )  # fixme: WRITEWAITER列表中的token可能在task取消后 并没有消失，导致凭空多出来一个写锁等待请求，与本地localtoken对不上
         await self.lock1.release("w")
+        self.assertFalse(await self.lock2.locked("w"))
+        self.assertFalse(await self.lock2.locked("r"))
         print(await self.client.keys("*"))
         await self.delkeys()
 
@@ -67,6 +78,7 @@ class TestLock(IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(self.lock2.acquire("w"), 1)
         await self.lock1.release("r")
+        self.assertFalse(await self.lock1.locked("w"))  # fixme 同上
         print(await self.client.keys("*"))
         await self.delkeys()
 
@@ -130,6 +142,11 @@ class TestLock(IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.lock2.acquire("r"), 1)
         await self.delkeys()
 
+    async def asyncTearDown(self) -> None:
+        await self.client.delete("RWLOCK:READ", "RWLOCK:WRITE", "RWLOCK:WRITEWAITER")
+
+
 if __name__ == "__main__":
     import unittest
+
     unittest.main()

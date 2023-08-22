@@ -8,6 +8,7 @@ from redis.asyncio import Redis
 
 from redislocks.exceptions import NotAvailable
 from redislocks.scripts import (
+    checklock_script,
     lockread_script,
     lockwrite_nowait_script,
     unlockread_script,
@@ -65,6 +66,7 @@ class RWLock:
         self._unlockwrite_script = self.client.register_script(
             unlockwrite_script
         )  # todo unlockwrite.lua
+        self._checklock_script = self.client.register_script(checklock_script)
         self._local_readtokens = []  # type: List[str]
         self._local_writetoken = None  # type: Optional[str]
         self._listen_task = asyncio.create_task(self._listen_events())
@@ -77,20 +79,19 @@ class RWLock:
         #     pass
         self._listen_task = None
 
-    async def _exists_or_init(self):
+    async def _exists_or_init(self) -> None:
         # await self.client.config_set("notify-keyspace-events", "Ag$lshzxeKEtmdn") todo 需要修改配置吗
-        old_key = await self.client.getset(self.check_exists_key, self.exists_val)
-        if old_key:
-            return False
+        await self.client.setnx(self.check_exists_key, self.exists_val)
 
-    async def clear(self):
-        await self.client.delete(self.check_exists_key, self.read_key, self.write_key, self.write_waiter_key)
+    async def reset(self):
+        await self.client.delete(self.read_key, self.write_key, self.write_waiter_key)
 
     async def release_all(self):
         for _ in range(len(self._local_readtokens)):
             await self.release("r")
         if self._local_writetoken is not None:
             await self.release("w")
+
     def _get_db(self) -> int:
         return self.client.get_connection_kwargs()["db"]
 
@@ -126,7 +127,12 @@ class RWLock:
                 waiter = asyncio.get_running_loop().create_future()
                 self._write_waiters[token] = waiter
                 try:
-                    await waiter
+                    await waiter  # 一旦取消，则writewaiter里面还是有token，但是本地的token却再也没机会得到她了
+                except asyncio.CancelledError:
+                    await self.client.lrem(
+                        self.write_waiter_key, 1, token
+                    )  # 因此需要删除等待写锁队列里面的token
+                    raise
                 finally:
                     del self._write_waiters[token]
                 self._local_writetoken = token
@@ -152,7 +158,8 @@ class RWLock:
         else:
             raise ValueError("mode must be 'r' or 'w'")
 
-    async def have_lock(self, mode: Literal["r", "w"] = "r") -> bool:
+    async def has_token(self, mode: Literal["r", "w"] = "r") -> bool:
+        """如果当前lock存在对应的token返回True"""
         if mode == "r":
             for token in self._local_readtokens:
                 if await self.client.sismember(self.read_key, token):
@@ -166,6 +173,23 @@ class RWLock:
                 return True
             else:
                 return False
+
+    async def locked(self, mode: Literal["r", "w"] = "r") -> bool:
+        """如果锁不能立刻获取返回True"""
+        if await self._checklock_script([self.namespace], [mode]):
+            return False
+        else:  # 加锁失败，不能立刻获取，
+            return True
+        # if mode == "r":  # 读锁能不能立刻获取取决于写锁
+        #     if await self.client.exists(self.write_key) or await self.client.llen(self.write_waiter_key) > 0:
+        #         return False
+        #     else:
+        #         return True
+        # elif mode == "w":
+        #     if not await self.client.exists(self.write_key) and (await self.client.scard(self.read_key)) == 0:
+        #         return True
+        #     else:
+        #         return False
 
     @property
     async def current_time(self) -> str:

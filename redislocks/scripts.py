@@ -21,3 +21,7 @@ with open(
 
 with open(_current_dir / "unlockwrite.lua", encoding="utf-8") as unlockwrite_f:
     unlockwrite_script = unlockwrite_f.read()
+
+
+with open(_current_dir / "checklock.lua", encoding="utf-8") as checklock_f:
+    checklock_script = checklock_f.read()

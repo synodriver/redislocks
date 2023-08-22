@@ -5,11 +5,13 @@ import asyncio
 import os
 from unittest import IsolatedAsyncioTestCase
 
-from redis.asyncio import Redis
-from redislocks import RWLock, NotAvailable
 from dotenv import load_dotenv
+from redis.asyncio import Redis
+
+from redislocks import NotAvailable, RWLock
 
 load_dotenv("./.env")
+
 
 class TestLock(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -21,14 +23,15 @@ class TestLock(IsolatedAsyncioTestCase):
 
     async def test_havelock(self):
         await self.lock1.acquire("r")
-        self.assertTrue(await self.lock1.have_lock("r"))
+        self.assertTrue(await self.lock1.has_token("r"))
         await self.lock1.acquire("r")
-        self.assertTrue(await self.lock1.have_lock("r"))
+        self.assertTrue(await self.lock1.has_token("r"))
+        self.assertTrue(await self.lock2.locked("w"))
         await self.lock1.release("r")
         await self.lock1.release("r")
-        self.assertFalse(await self.lock1.have_lock("r"))
+        self.assertFalse(await self.lock1.has_token("r"))
         print(await self.client.keys("*"))
-        self.assertFalse(await self.lock2.have_lock("r"))
+        self.assertFalse(await self.lock2.has_token("r"))
 
     async def test_read_read(self):
         await self.lock1.acquire("r")
@@ -58,6 +61,11 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.lock1.release("r")
         print(await self.client.keys("*"))
 
+    async def asyncTearDown(self) -> None:
+        await self.client.delete("RWLOCK:READ", "RWLOCK:WRITE", "RWLOCK:WRITEWAITER")
+
+
 if __name__ == "__main__":
     import unittest
+
     unittest.main()
