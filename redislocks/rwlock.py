@@ -9,13 +9,14 @@ from redis.asyncio import Redis
 
 
 class _InternalLockCategory:
-    write_lock_list = "write_lock_list"
-    read_lock_list = "read_lock_list"
+    write_lock = "write_lock"
+    read_lock = "read_lock"
+    preservation = "preservation"
 
 
 class _RedisEventCategory:
     expired = b"expired"
-    incrby = b"incrby"
+    delR = b"del"
 
 
 class RWLock:
@@ -28,80 +29,77 @@ class RWLock:
         self.is_use_local_time = False
         self.namespace = namespace or "RWLOCK"
 
-    # 目前只实现了写锁
+        self._read_lock_time = '0'
+        self._write_lock_time = '0'
+
+        self._write_lock_name = self._get_key_string(
+            _InternalLockCategory.write_lock
+        )
+        self._read_lock_name = self._get_key_string(_InternalLockCategory.read_lock)
+        self._preservation_name = self._get_key_string(_InternalLockCategory.preservation)
+
+        self._write_lock_keyspace_name = self._get_keyspace_name(
+            _InternalLockCategory.write_lock
+        )
+        self._read_lock_keyspace_name = self._get_keyspace_name(
+            _InternalLockCategory.read_lock
+        )
+        self._preservation_keyspace_name = self._get_keyspace_name(_InternalLockCategory.preservation)
+
     async def acquire(self, mode: Literal["r", "w"] = "r") -> Union[str, bytes]:
-        write_lock_list_name = self._get_key_string(
-            _InternalLockCategory.write_lock_list
-        )
-        read_lock_list_name = self._get_key_string(_InternalLockCategory.read_lock_list)
+        if mode == 'r':
+            await self._acquire_read_lock()
+        elif mode == 'w':
+            await self._acquire_write_lock()
 
-        write_lock_keyspace_name = self._get_keyspace_name(
-            _InternalLockCategory.write_lock_list
-        )
-        read_lock_keyspace_name = self._get_keyspace_name(
-            _InternalLockCategory.read_lock_list
-        )
+    async def release(self):
+        if self._read_lock_time != '0':
+            await self._release_read_lock()
+        elif self._write_lock_time != '0':
+            await self._release_write_lock()
 
-        while True:
-            print("start")
-            # 先检查是否有读锁存在，如果有读锁，则预先抢占写锁并不设置超时
-            # 否则直接开始获取写锁
-            catch = 0
-            async with self.client.pubsub() as pub_sub:
-                # 先 sub 对应的读锁事件，检查是否存在读锁被获取的情况
-                pub_sub.subscribe(read_lock_keyspace_name)
-                reading_count = self.client.get(read_lock_list_name) or 0
-                if reading_count > 0:
-                    # 若不存在则开始抢占写锁，拒绝新读锁的进入（逻辑上）
-                    catch = await self.client.set(write_lock_list_name, 1, nx=True)
-
-                    # 等待读锁全部释放
+    async def _acquire_read_lock(self):
+        script = self.client.register_script(self._get_check_and_set_reading_lua())
+        with self.client.pubsub() as pub_sub:
+            pub_sub.subscribe(self._preservation_keyspace_name)
+            while True:
+                ret = await script(keys=[self._preservation_name], args=[self._read_lock_name])
+                if ret == '0':
                     async for event in pub_sub.listen():
-                        print(event)
-                        if (
-                            event["data"] == _RedisEventCategory.incrby
-                        ):  # todo ensure_bytes
-                            reading_count = (
-                                await self.client.get(
-                                    _InternalLockCategory.write_lock_list
-                                )
-                                or 0
-                            )
-                            if not reading_count:
-                                break
-                        elif event["data"] == _RedisEventCategory.expired:
-                            ...
+                        if event['data'] in [_RedisEventCategory.expired, _RedisEventCategory.delR]:
+                            break
                 else:
-                    ...
+                    self._read_lock_time = ret
+                    return
 
-            # 获取写锁，如果上面 catch 到了则这里返回 0
-            is_existing = await self.client.set(
-                write_lock_list_name, 1, px=timedelta(milliseconds=500000), nx=True
-            )
-            if not catch and not is_existing:
-                pub_sub = self.client.pubsub()
-                await pub_sub.subscribe(
-                    self._get_keyspace_name(_InternalLockCategory.write_lock_list)
-                )
+    async def _release_read_lock(self):
+        script = self.client.register_script(self._get_check_and_delete_reading_lua())
+        await script(keys=[self._read_lock_name], args=[self._read_lock_time])
+        self._read_lock_time = '0'
 
-                # 等待读锁释放（过期释放）
-                # TODO 补充主动删除事件
-                async for event in pub_sub.listen():
-                    print(event)
-                    if event["data"] == _RedisEventCategory.expired:
-                        print("enter event")
-                        break
-            elif catch:
-                # 重置一下过期时间
-                await self.client.set(
-                    write_lock_list_name, 1, px=timedelta(milliseconds=500000)
-                )
-                return "1"
-            else:
-                return "1"
+    async def _acquire_write_lock(self):
+        script = self.client.register_script(self._get_check_and_set_writing_lua())
+        with self.client.pubsub() as pub_sub:
+            pub_sub.subscribe(self._read_lock_keyspace_name)
+            pub_sub.subscribe(self._write_lock_keyspace_name)
+            while True:
+                ret = await script(keys=[self._read_lock_name, self._write_lock_name, self._preservation_name])
+                if ret != '0' and ret != '1':
+                    self._write_lock_time = ret
+                    return
+                elif ret == '0':
+                    async for event in pub_sub.listen():
+                        if event['channel'] == self._read_lock_keyspace_name and event['data'] in [_RedisEventCategory.expired, _RedisEventCategory.delR]:
+                            break
+                elif ret == '1':
+                    async for event in pub_sub.listen():
+                        if event['channel'] == self._write_lock_keyspace_name and event['data'] in [_RedisEventCategory.expired, _RedisEventCategory.delR]:
+                            break
 
-    async def release(self, token: Union[str, bytes]):
-        ...
+    async def _release_write_lock(self):
+        script = self.client.register_script(self._get_check_and_delete_writing_lua())
+        await script(keys=[self._write_lock_name, self._preservation_name], args=[self._write_lock_time])
+        self._write_lock_time = '0'
 
     def _get_key_string(self, category) -> str:
         return "{}:{}".format(self.namespace, category)
@@ -114,6 +112,30 @@ class RWLock:
 
     def _get_db(self) -> int:
         return self.client.get_connection_kwargs()["db"]
+
+    def _get_check_and_set_reading_lua(self) -> str:
+        if not hasattr(self, '_check_and_set_for_reading'):
+            with open('check_and_set_for_reading.lua') as f:
+                setattr(self, '_check_and_set_for_reading', f.read())
+        return self._check_and_set_for_reading
+
+    def _get_check_and_delete_reading_lua(self) -> str:
+        if not hasattr(self, '_check_and_delete_for_reading'):
+            with open('check_and_delete_for_reading.lua') as f:
+                setattr(self, '_check_and_delete_for_reading', f.read())
+        return self._check_and_delete_for_reading
+
+    def _get_check_and_set_writing_lua(self) -> str:
+        if not hasattr(self, '_check_and_set_for_writing'):
+            with open('check_and_set_for_writing.lua') as f:
+                setattr(self, '_check_and_set_for_writing', f.read())
+        return self._check_and_set_for_writing
+
+    def _get_check_and_delete_writing_lua(self) -> str:
+        if not hasattr(self, '_check_and_delete_for_writing'):
+            with open('check_and_delete_for_writing.lua') as f:
+                setattr(self, '_check_and_delete_for_writing', f.read())
+        return self._check_and_delete_for_writing
 
     @property
     async def current_time(self):
