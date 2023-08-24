@@ -1,9 +1,9 @@
 """
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
+import os
 import time
-from datetime import timedelta
-from typing import Literal, Optional, Union
+from typing import Literal, Optional
 
 from redis.asyncio import Redis
 
@@ -19,11 +19,14 @@ class _RedisEventCategory:
     delR = b"del"
 
 
+current_work_dir = os.path.dirname(__file__)
+
+
 class RWLock:
     def __init__(
-        self,
-        client: Optional[Redis] = None,
-        namespace: Optional[str] = None,
+            self,
+            client: Optional[Redis] = None,
+            namespace: Optional[str] = None,
     ):
         self.client = client or Redis()
         self.is_use_local_time = False
@@ -62,8 +65,8 @@ class RWLock:
 
     async def _acquire_read_lock(self):
         script = self.client.register_script(self._get_check_and_set_reading_lua())
-        with self.client.pubsub() as pub_sub:
-            pub_sub.subscribe(self._preservation_keyspace_name)
+        async with self.client.pubsub() as pub_sub:
+            await pub_sub.subscribe(self._preservation_keyspace_name)
             while True:
                 ret = await script(
                     keys=[self._preservation_name], args=[self._read_lock_name]
@@ -76,8 +79,9 @@ class RWLock:
                         ]:
                             break
                 else:
-                    self._read_lock_time = ret
-                    return
+                    break
+        self._read_lock_time = ret
+        return
 
     async def _release_read_lock(self):
         script = self.client.register_script(self._get_check_and_delete_reading_lua())
@@ -86,9 +90,9 @@ class RWLock:
 
     async def _acquire_write_lock(self):
         script = self.client.register_script(self._get_check_and_set_writing_lua())
-        with self.client.pubsub() as pub_sub:
-            pub_sub.subscribe(self._read_lock_keyspace_name)
-            pub_sub.subscribe(self._write_lock_keyspace_name)
+        async with self.client.pubsub() as pub_sub:
+            await pub_sub.subscribe(self._read_lock_keyspace_name)
+            await pub_sub.subscribe(self._write_lock_keyspace_name)
             while True:
                 ret = await script(
                     keys=[
@@ -98,8 +102,7 @@ class RWLock:
                     ]
                 )
                 if ret != "0" and ret != "1":
-                    self._write_lock_time = ret
-                    return
+                    break
                 elif ret == "0":
                     async for event in pub_sub.listen():
                         if event["channel"] == self._read_lock_keyspace_name and event[
@@ -112,6 +115,8 @@ class RWLock:
                             "data"
                         ] in [_RedisEventCategory.expired, _RedisEventCategory.delR]:
                             break
+        self._write_lock_time = ret
+        return
 
     async def _release_write_lock(self):
         script = self.client.register_script(self._get_check_and_delete_writing_lua())
@@ -135,25 +140,25 @@ class RWLock:
 
     def _get_check_and_set_reading_lua(self) -> str:
         if not hasattr(self, "_check_and_set_for_reading"):
-            with open("check_and_set_for_reading.lua") as f:
+            with open(current_work_dir + '/' + "check_and_set_for_reading.lua") as f:
                 setattr(self, "_check_and_set_for_reading", f.read())
         return self._check_and_set_for_reading
 
     def _get_check_and_delete_reading_lua(self) -> str:
         if not hasattr(self, "_check_and_delete_for_reading"):
-            with open("check_and_delete_for_reading.lua") as f:
+            with open(current_work_dir + '/' + "check_and_delete_for_reading.lua") as f:
                 setattr(self, "_check_and_delete_for_reading", f.read())
         return self._check_and_delete_for_reading
 
     def _get_check_and_set_writing_lua(self) -> str:
         if not hasattr(self, "_check_and_set_for_writing"):
-            with open("check_and_set_for_writing.lua") as f:
+            with open(current_work_dir + '/' + "check_and_set_for_writing.lua") as f:
                 setattr(self, "_check_and_set_for_writing", f.read())
         return self._check_and_set_for_writing
 
     def _get_check_and_delete_writing_lua(self) -> str:
         if not hasattr(self, "_check_and_delete_for_writing"):
-            with open("check_and_delete_for_writing.lua") as f:
+            with open(current_work_dir + '/' + "check_and_delete_for_writing.lua") as f:
                 setattr(self, "_check_and_delete_for_writing", f.read())
         return self._check_and_delete_for_writing
 
