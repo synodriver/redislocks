@@ -46,7 +46,7 @@ class RWLock:
         )
         self._preservation_keyspace_name = self._get_keyspace_name(_InternalLockCategory.preservation)
 
-    async def acquire(self, mode: Literal["r", "w"] = "r") -> Union[str, bytes]:
+    async def acquire(self, mode: Literal["r", "w"] = "r"):
         if mode == 'r':
             await self._acquire_read_lock()
         elif mode == 'w':
