@@ -134,6 +134,8 @@ class TestLock(IsolatedAsyncioTestCase):
         asyncio.create_task(acquire_task())
         await asyncio.sleep(1)
         self.assertTrue(not await self.client.get("RWLOCK:WRITE"))  # 写锁在等待
+        self.assertTrue(await self.lock1.locked("r"))
+        self.assertTrue(await self.lock1.locked("w"))
         print(await self.client.keys("*"))
         print(await self.client.smembers("RWLOCK:READ"))
         print(await self.client.lrange("RWLOCK:WRITEWAITER", 0, 5))

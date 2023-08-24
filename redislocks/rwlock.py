@@ -2,19 +2,27 @@
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
+from enum import IntEnum
 from typing import Dict, List, Literal, Optional, Union
 
 from redis.asyncio import Redis
 
 from redislocks.exceptions import NotAvailable
 from redislocks.scripts import (
-    checklock_script,
+    get_state_script,
     lockread_script,
     lockwrite_nowait_script,
     unlockread_script,
     unlockwrite_script,
 )
 from redislocks.utils import ensure_bytes, ensure_str
+
+
+class LockState(IntEnum):
+    empty = 0  # 空
+    reading = 1  # 只有读锁
+    writing = 2  # 只有写锁
+    waiting_write = 3  # 有读锁，还有写锁在等待队列，因此此时不能继续获取读锁
 
 
 class RWLock:
@@ -66,7 +74,7 @@ class RWLock:
         self._unlockwrite_script = self.client.register_script(
             unlockwrite_script
         )  # todo unlockwrite.lua
-        self._checklock_script = self.client.register_script(checklock_script)
+        self._get_state_script = self.client.register_script(get_state_script)
         self._local_readtokens = []  # type: List[str]
         self._local_writetoken = None  # type: Optional[str]
         self._listen_task = asyncio.create_task(self._listen_events())
@@ -153,7 +161,8 @@ class RWLock:
         elif mode == "w":
             if self._local_writetoken is None:
                 raise ValueError("can not release write lock without acquire it")
-            await self._unlockwrite_script([self.namespace])
+            if not await self._unlockwrite_script([self.namespace]):
+                raise ValueError("can not release write lock without acquire it")
             self._local_writetoken = None
         else:
             raise ValueError("mode must be 'r' or 'w'")
@@ -174,12 +183,22 @@ class RWLock:
             else:
                 return False
 
+    async def get_state(self) -> int:
+        return await self._get_state_script([self.namespace])
+
     async def locked(self, mode: Literal["r", "w"] = "r") -> bool:
         """如果锁不能立刻获取返回True"""
-        if await self._checklock_script([self.namespace], [mode]):
-            return False
-        else:  # 加锁失败，不能立刻获取，
-            return True
+        current_state = await self._get_state_script([self.namespace])
+        if mode == "r":
+            if current_state in (2, 3):
+                return True
+            else:
+                return False
+        elif mode == "w":
+            if current_state in (1, 2, 3):
+                return True
+            else:
+                return False
         # if mode == "r":  # 读锁能不能立刻获取取决于写锁
         #     if await self.client.exists(self.write_key) or await self.client.llen(self.write_waiter_key) > 0:
         #         return False

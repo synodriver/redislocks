@@ -1,6 +1,6 @@
--- 加写锁 直接设置不检查
+-- 检查读锁或者写锁能否立刻获取
 -- numkey: 1
--- namespace
+-- key: namespace
 local namespace = KEYS[1]
 local read_key = namespace .. ":READ"
 local write_key = namespace .. ":WRITE"
@@ -21,14 +21,4 @@ local function get_state()
     end
 end
 
-local current_state = get_state()
-
-if current_state == 0 then
-    -- 不存在写锁 也不存在 读锁 可以直接设置写锁
-    local time = redis.call("TIME")
-    local timestring = time[1] ..".".. time[2] -- string
-    redis.call("SET", write_key, timestring)
-    return timestring -- 获取写锁成功，返回时间戳
-else
-    return 0
-end
+return get_state()
