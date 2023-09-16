@@ -144,6 +144,20 @@ class TestLock(IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.lock2.acquire("r"), 1)
         await self.delkeys()
 
+    async def test_state(self):
+        self.assertEquals(await self.lock2.get_state(), 0)
+        await self.lock1.acquire("w")
+        self.assertEquals(await self.lock2.get_state(), 2)
+        await self.lock1.release("w")
+        self.assertEquals(await self.lock2.get_state(), 0)
+        await self.lock1.acquire("r")
+        self.assertEquals(await self.lock2.get_state(), 1)
+        async def acquire_task():
+            await self.lock1.acquire("w")
+        asyncio.create_task(acquire_task())
+        await asyncio.sleep(0.5)
+        self.assertEquals(await self.lock2.get_state(), 3)
+
     async def asyncTearDown(self) -> None:
         await self.client.delete("RWLOCK:READ", "RWLOCK:WRITE", "RWLOCK:WRITEWAITER")
 

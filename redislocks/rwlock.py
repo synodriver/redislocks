@@ -103,7 +103,7 @@ class RWLock:
     def _get_db(self) -> int:
         return self.client.get_connection_kwargs()["db"]
 
-    async def acquire(self, mode: Literal["r", "w"] = "r") -> Union[str]:
+    async def acquire(self, mode: Literal["r", "w"] = "r") -> str:
         await self._exists_or_init()
         if mode == "r":
             if (token := await self._lockread_script([self.namespace])) == 0:  # 加锁失败
@@ -114,13 +114,13 @@ class RWLock:
                         await waiter  # todo 添加asyncio.wait_for 就可以超时了
                     finally:
                         self._read_waiters.remove(waiter)
-                    await self.acquire(mode)
+                    return await self.acquire(mode)
                 else:
                     raise NotAvailable
             else:
                 token = ensure_str(token)
                 self._local_readtokens.append(token)
-                return token  # type: ignore
+                return token
         elif mode == "w":
             if token := await self._lockwrite_nowait_script(
                 [self.namespace]
@@ -144,7 +144,7 @@ class RWLock:
                 finally:
                     del self._write_waiters[token]
                 self._local_writetoken = token
-                return token  # type: ignore
+                return token
         else:
             raise ValueError("mode must be 'r' or 'w'")
 
