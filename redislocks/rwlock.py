@@ -130,8 +130,9 @@ class RWLock:
             if not self.blocking:
                 raise NotAvailable
             else:
-                token: str = await self.current_time
-                await self.client.rpush(self.write_waiter_key, token)  # 这下只能等了
+                token: str = await self.current_time  # type: ignore
+                # 这下只能等了
+                await self.client.rpush(self.write_waiter_key, token)  # type: ignore
                 waiter = asyncio.get_running_loop().create_future()
                 self._write_waiters[token] = waiter
                 try:
@@ -139,7 +140,8 @@ class RWLock:
                 except asyncio.CancelledError:
                     await self.client.lrem(
                         self.write_waiter_key, 1, token
-                    )  # 因此需要删除等待写锁队列里面的token
+                    )  # type: ignore
+                    # 因此需要删除等待写锁队列里面的token
                     raise
                 finally:
                     del self._write_waiters[token]
@@ -171,7 +173,7 @@ class RWLock:
         """如果当前lock存在对应的token返回True"""
         if mode == "r":
             for token in self._local_readtokens:
-                if await self.client.sismember(self.read_key, token):
+                if await self.client.sismember(self.read_key, token):  # type: ignore
                     return True
             else:
                 return False

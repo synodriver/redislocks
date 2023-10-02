@@ -29,7 +29,7 @@ class TestLock(IsolatedAsyncioTestCase):
         self.assertTrue(await self.lock1.has_token("r"))
         self.assertTrue(await self.lock2.locked("w"))
         self.assertFalse(await self.lock2.locked("r"))
-        await self.lock1.acquire("r")
+        self.assertNotEquals(await self.lock1.acquire("r"), None)
         self.assertTrue(await self.lock1.has_token("r"))
         await self.lock1.release("r")
         await self.lock1.release("r")
@@ -152,8 +152,10 @@ class TestLock(IsolatedAsyncioTestCase):
         self.assertEquals(await self.lock2.get_state(), 0)
         await self.lock1.acquire("r")
         self.assertEquals(await self.lock2.get_state(), 1)
+
         async def acquire_task():
             await self.lock1.acquire("w")
+
         asyncio.create_task(acquire_task())
         await asyncio.sleep(0.5)
         self.assertEquals(await self.lock2.get_state(), 3)

@@ -5,7 +5,7 @@ Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 import asyncio
 
 # __version_info__ = ("0", "2", "2")
-from typing import Awaitable, Callable, Optional, Union
+from typing import Awaitable, Callable, List, Optional, Union
 
 from redis.asyncio import Redis
 
@@ -37,7 +37,7 @@ class Semaphore:
         self.stale_client_timeout = stale_client_timeout
         self.is_use_local_time = False
         self.blocking = blocking
-        self._local_tokens = list()
+        self._local_tokens = list()  # type: List[Union[str, bytes]]
 
     async def _exists_or_init(self):
         old_key = await self.client.getset(self.check_exists_key, self.exists_val)
@@ -72,17 +72,17 @@ class Semaphore:
             await self.release_stale_locks()
 
         if self.blocking:
-            pair = await self.client.blpop(self.available_key, timeout)
+            pair = await self.client.blpop(self.available_key, timeout)  # type: ignore
             if pair is None:
                 raise NotAvailable
             token = pair[1]
         else:
-            token = await self.client.lpop(self.available_key)
+            token = await self.client.lpop(self.available_key)  # type: ignore
             if token is None:
                 raise NotAvailable
 
         self._local_tokens.append(token)
-        await self.client.hset(self.grabbed_key, token, await self.current_time)
+        await self.client.hset(self.grabbed_key, token, await self.current_time)  # type: ignore
         if target is not None:
             try:
                 if asyncio.iscoroutinefunction(target):
@@ -124,7 +124,7 @@ class Semaphore:
 
     async def locked(self) -> bool:
         """如果信号量不能被立刻获取返回True"""
-        grabbed: int = await self.client.hlen(self.grabbed_key)
+        grabbed: int = await self.client.hlen(self.grabbed_key)  # type: ignore
         return True if grabbed == self.value else False
 
     async def release(self):
