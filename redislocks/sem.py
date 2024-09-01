@@ -4,7 +4,6 @@ Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
 
-# __version_info__ = ("0", "2", "2")
 from typing import Awaitable, Callable, List, Optional, Union
 
 from redis.asyncio import Redis
@@ -29,6 +28,14 @@ class Semaphore:
         stale_client_timeout: Optional[float] = None,
         blocking: bool = True,
     ):
+        """
+
+        :param value: 信号量容量
+        :param client: redis client
+        :param namespace: lock的命名空间，相同的视为同一把锁，使用相同的redis key
+        :param stale_client_timeout:
+        :param blocking:
+        """
         self.client = client or Redis()
         if value < 1:
             raise ValueError("Semaphore initial value must be >= 0")
@@ -40,7 +47,9 @@ class Semaphore:
         self._local_tokens = list()  # type: List[Union[str, bytes]]
 
     async def _exists_or_init(self):
-        old_key = await self.client.getset(self.check_exists_key, self.exists_val)
+        old_key = await self.client.set(
+            self.check_exists_key, self.exists_val, get=True
+        )
         if old_key:
             return False
         return await self._init()
@@ -67,6 +76,12 @@ class Semaphore:
         timeout: int = 0,
         target: Optional[Callable[[str], Union[None, Awaitable[None]]]] = None,
     ):
+        """
+
+        :param timeout: 获取信号量的超时时间
+        :param target: 由sem保护的函数，执行完成后释放sem
+        :return:
+        """
         await self._exists_or_init()
         if self.stale_client_timeout is not None:
             await self.release_stale_locks()
@@ -90,21 +105,25 @@ class Semaphore:
                 else:
                     target(token)
             finally:
+                self._local_tokens.remove(token)
                 await self.signal(token)
         return token
 
     async def release_stale_locks(self, expires=10):
-        token = self.client.getset(self.check_release_locks_key, self.exists_val)
+        token = await self.client.set(
+            self.check_release_locks_key, self.exists_val, get=True
+        )
         if token:
             return False
         await self.client.expire(self.check_release_locks_key, expires)
         try:
-            for token, looked_at in (
+            for token, locked_at in (
                 await self.client.hgetall(self.grabbed_key)
             ).items():
-                timed_out_at = float(looked_at) + self.stale_client_timeout
+                timed_out_at = float(locked_at) + self.stale_client_timeout
                 if timed_out_at < float(await self.current_time):
                     await self.signal(token)
+                    self._local_tokens.remove(token)
         finally:
             await self.client.delete(self.check_release_locks_key)
 
@@ -170,6 +189,11 @@ class Semaphore:
         if not hasattr(self, key_name):
             setattr(self, key_name, self.get_namespaced_key(namespace_suffix))
         return getattr(self, key_name)
+
+    async def aclose(self):
+        self._local_tokens.clear()
+        await self.client.delete(self.check_exists_key, self.available_key, self.grabbed_key)
+        await self.client.aclose()
 
     @property
     async def current_time(self) -> str:

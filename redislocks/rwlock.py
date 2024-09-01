@@ -9,9 +9,10 @@ from redis.asyncio import Redis
 
 from redislocks.exceptions import NotAvailable
 from redislocks.scripts import (
+    cancellockwrite_script,
     get_state_script,
     lockread_script,
-    lockwrite_nowait_script,
+    lockwrite_script,
     unlockread_script,
     unlockwrite_script,
 )
@@ -44,6 +45,12 @@ class RWLock:
         namespace: str = "RWLOCK",
         blocking: bool = True,
     ):
+        """
+
+        :param client: redis client
+        :param namespace: lock的命名空间，相同的视为同一把锁，使用相同的redis key
+        :param blocking: 阻塞与否 非阻塞模式下，如果不能立刻获取锁则会抛出NotAvailable
+        """
         self.client = client or Redis()
         self.namespace = namespace
         self.blocking = blocking
@@ -54,26 +61,23 @@ class RWLock:
         self.write_waiter_key = self.get_namespaced_key("WRITEWAITER")
 
         self._read_waiters = []  # type: List[asyncio.Future]
-        self._write_waiters = {}  # type: Dict[float, asyncio.Future]
+        self._write_waiters = {}  # type: Dict[str, asyncio.Future]
 
         self._lockread_script = self.client.register_script(
             lockread_script
-        )  # todo lockread.lua
+        )  # lockread.lua
         self._unlockread_script = self.client.register_script(
             unlockread_script
-        )  # todo unlockread.lua
-        # self._checkcanread_script = self.client.register_script(
-        #     """"""
-        # )  #  checkcanread.lua
-        # self._checkcanwrite_script = self.client.register_script(
-        #     """"""
-        # )  #  checkcanwrite.lua
-        self._lockwrite_nowait_script = self.client.register_script(
-            lockwrite_nowait_script
-        )  # todo lockwrite_nowait.lua
+        )  # unlockread.lua
+        self._lockwrite_script = self.client.register_script(
+            lockwrite_script
+        )  # lockwrite.lua
         self._unlockwrite_script = self.client.register_script(
             unlockwrite_script
-        )  # todo unlockwrite.lua
+        )  # unlockwrite.lua
+        self._cancellockwrite_script = self.client.register_script(
+            cancellockwrite_script
+        )  # cancellockwrite.lua
         self._get_state_script = self.client.register_script(get_state_script)
         self._local_readtokens = []  # type: List[str]
         self._local_writetoken = None  # type: Optional[str]
@@ -92,7 +96,23 @@ class RWLock:
         await self.client.setnx(self.check_exists_key, self.exists_val)
 
     async def reset(self):
+        """
+        删除redis中的key，重置状态，释放持有的token
+        :return:
+        """
+        self._read_waiters.clear()
+        self._write_waiters.clear()
+        self._local_readtokens.clear()
+        self._local_writetoken = None
         await self.client.delete(self.read_key, self.write_key, self.write_waiter_key)
+
+    async def aclose(self):
+        self._read_waiters.clear()
+        self._write_waiters.clear()
+        self._local_readtokens.clear()
+        self._local_writetoken = None
+        await self.client.delete(self.check_exists_key, self.read_key, self.write_key, self.write_waiter_key)
+        await self.client.aclose()
 
     async def release_all(self):
         for _ in range(len(self._local_readtokens)):
@@ -106,47 +126,51 @@ class RWLock:
     async def acquire(self, mode: Literal["r", "w"] = "r") -> str:
         await self._exists_or_init()
         if mode == "r":
-            if (token := await self._lockread_script([self.namespace])) == 0:  # 加锁失败
-                if self.blocking:  # 阻塞模式，开始等self._read_waiters
-                    waiter = asyncio.get_running_loop().create_future()
-                    self._read_waiters.append(waiter)
-                    try:
-                        await waiter  # todo 添加asyncio.wait_for 就可以超时了
-                    finally:
-                        self._read_waiters.remove(waiter)
-                    return await self.acquire(mode)
-                else:
-                    raise NotAvailable
-            else:
+            if token := await self._lockread_script([self.namespace]):
                 token = ensure_str(token)
                 self._local_readtokens.append(token)
                 return token
+            if self.blocking:  # 不能立刻获取到读锁，阻塞模式(默认)，开始等self._read_waiters，
+                waiter = asyncio.get_running_loop().create_future()
+                self._read_waiters.append(waiter)
+                try:
+                    await waiter
+                finally:
+                    self._read_waiters.remove(waiter)
+                return await self.acquire(
+                    mode
+                )  # 终于写锁完成了，再次acquire抢读锁 fixme 不可能抢到递归超出限制都没抢到锁吧？太晦气了
+            else:
+                raise NotAvailable
         elif mode == "w":
-            if token := await self._lockwrite_nowait_script(
+            if token := await self._lockwrite_script(
                 [self.namespace]
             ):  # 可以立刻非阻塞获取写锁 str, bytes
-                self._local_writetoken = ensure_str(token)
+                self._local_writetoken = ensure_str(token)  # 时间戳
                 return token  # type: ignore
-            if not self.blocking:
-                raise NotAvailable
-            else:
+            if self.blocking:  # 不能立刻获取到写锁，阻塞模式(默认)，开始等self._write_waiters，
                 token: str = await self.current_time  # type: ignore
                 # 这下只能等了
                 await self.client.rpush(self.write_waiter_key, token)  # type: ignore
                 waiter = asyncio.get_running_loop().create_future()
                 self._write_waiters[token] = waiter
                 try:
-                    await waiter  # 一旦取消，则writewaiter里面还是有token，但是本地的token却再也没机会得到她了
+                    await waiter  # 一旦取消，则redis中writewaiter里面还是有token，但是本地的write_waiter已经del了 ，因此需要删除等待写锁队列里面的token
                 except asyncio.CancelledError:
-                    await self.client.lrem(
-                        self.write_waiter_key, 1, token
-                    )  # type: ignore
-                    # 因此需要删除等待写锁队列里面的token
+                    # 如果在这期间正好写锁轮了一下，write_waiter_key又上位了，lrem不到了，那就糟糕了
+                    # 写一个cancellockwrite.lua，KEYS = [namespace, 要取消的token]，先lrem，没删除到就是这期间写锁轮了一下，上位了
+                    # 可惜太晚了，还是要删掉，就如同unlockwrite.lua做的那样释放了先
+                    await self._cancellockwrite_script([self.namespace, token])
+                    # await self.client.lrem(
+                    #     self.write_waiter_key, 1, token
+                    # )  # type: ignore
                     raise
                 finally:
                     del self._write_waiters[token]
                 self._local_writetoken = token
                 return token
+            else:
+                raise NotAvailable
         else:
             raise ValueError("mode must be 'r' or 'w'")
 
@@ -163,7 +187,8 @@ class RWLock:
         elif mode == "w":
             if self._local_writetoken is None:
                 raise ValueError("can not release write lock without acquire it")
-            if not await self._unlockwrite_script([self.namespace]):
+            if not await self._unlockwrite_script([self.namespace]): # todo 如果加入超时机制的话 这里需要检查远程的write_key与self._local_writetoken是否对的上
+                # 如果对不上就是那个已经被超时检查器给释放了 读token扼要检查 没在set里面也是被超时检查器给释放了
                 raise ValueError("can not release write lock without acquire it")
             self._local_writetoken = None
         else:
@@ -226,22 +251,6 @@ class RWLock:
         监听redis中的key变动 从而知道什么时候可以获取锁
         :return:
         """
-
-        # todo 现在只有加读锁的逻辑，因此只能监听写锁有关的几个key，未来为了加写锁还得监听读锁的几个key
-        # async def check_canread() -> bool:
-        #     """
-        #     判断是否可以加读锁 todo 这个函数抽空换成lua
-        #     :return:
-        #     """
-        #     if await self._checkcanread_script([self.namespace]):
-        #         return True
-        #     return False
-        # if (
-        #     await self.client.llen(self.write_waiter_key)
-        # ) == 0 and not await self.client.exists(self.write_key):
-        #     return True
-        # return False
-
         async with self.client.pubsub() as pubsub:
             await pubsub.subscribe(
                 f"__keyspace@{self._get_db()}__:{self.write_key}",
@@ -261,7 +270,7 @@ class RWLock:
                     and ensure_str(event["channel"])
                     == f"__keyspace@{self._get_db()}__:{self.write_key}"
                     and ensure_str(event["data"]) == "set"
-                ):  # 被释放的老 读锁/写锁 唤醒了新写锁，对应token的写锁不用等了，如果这个client有的话
+                ):  # 被释放的老 读锁/写锁 唤醒了新写锁，对应token的写锁不用等了，如果那个token属于这个client有的话
                     token = ensure_str(
                         await self.client.get(self.write_key)
                     )  # 轮到哪个幸运儿上了

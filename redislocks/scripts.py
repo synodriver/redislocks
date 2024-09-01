@@ -5,23 +5,16 @@ from pathlib import Path
 
 _current_dir = Path(__file__).resolve().parent
 
-with open(_current_dir / "lockread.lua", encoding="utf-8") as lockread_f:
-    lockread_script = lockread_f.read()
+lockread_script = (_current_dir / "lockread.lua").read_text(encoding="utf-8")
 
-with open(_current_dir / "unlockread.lua", encoding="utf-8") as unlockread_f:
-    unlockread_script = unlockread_f.read()
+unlockread_script = (_current_dir / "unlockread.lua").read_text(encoding="utf-8")
 
-# with open(_current_dir / "checkcanread.lua", encoding="utf-8") as checkcanread_f:
-#     checkcanread_script = checkcanread_f.read()
+lockwrite_script = (_current_dir / "lockwrite.lua").read_text(encoding="utf-8")
 
-with open(
-    _current_dir / "lockwrite_nowait.lua", encoding="utf-8"
-) as lockwrite_nowait_f:
-    lockwrite_nowait_script = lockwrite_nowait_f.read()
+unlockwrite_script = (_current_dir / "unlockwrite.lua").read_text(encoding="utf-8")
 
-with open(_current_dir / "unlockwrite.lua", encoding="utf-8") as unlockwrite_f:
-    unlockwrite_script = unlockwrite_f.read()
+cancellockwrite_script = (_current_dir / "cancellockwrite.lua").read_text(
+    encoding="utf-8"
+)
 
-
-with open(_current_dir / "get_state.lua", encoding="utf-8") as get_state_f:
-    get_state_script = get_state_f.read()
+get_state_script = (_current_dir / "get_state.lua").read_text(encoding="utf-8")

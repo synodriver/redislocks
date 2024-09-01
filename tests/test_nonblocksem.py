@@ -15,10 +15,14 @@ load_dotenv("./.env")
 class TestSem(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.sem1 = Semaphore(
-            2, Redis(host=os.getenv("REDIS"), max_connections=10), blocking=False
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            blocking=False,
         )
         self.sem2 = Semaphore(
-            2, Redis(host=os.getenv("REDIS"), max_connections=10), blocking=False
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            blocking=False,
         )
         await self.sem1.reset()
 
