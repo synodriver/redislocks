@@ -201,13 +201,17 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.delkeys()
 
     async def test_aclose(self):
-        lock1 = RWLock(Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")), namespace="ACLOSERWLOCK")
+        lock1 = RWLock(
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            namespace="ACLOSERWLOCK",
+        )
         await lock1.acquire("w")
         await lock1.aclose()
         self.assertFalse(await self.client1.exists("ACLOSERWLOCK:READ"))
         self.assertFalse(await self.client1.exists("ACLOSERWLOCK:WRITE"))
         self.assertFalse(await self.client1.exists("ACLOSERWLOCK:WRITEWAITER"))
         self.assertFalse(await self.client1.exists("ACLOSERWLOCK:EXISTS"))
+
     # async def asyncTearDown(self) -> None:
     #     await self.client1.reset()
     #     await self.lock1.aclose()

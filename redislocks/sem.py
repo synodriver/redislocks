@@ -3,7 +3,6 @@
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
-
 from typing import Awaitable, Callable, List, Optional, Union
 
 from redis.asyncio import Redis
@@ -192,7 +191,9 @@ class Semaphore:
 
     async def aclose(self):
         self._local_tokens.clear()
-        await self.client.delete(self.check_exists_key, self.available_key, self.grabbed_key)
+        await self.client.delete(
+            self.check_exists_key, self.available_key, self.grabbed_key
+        )
         await self.client.aclose()
 
     @property

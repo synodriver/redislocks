@@ -23,6 +23,22 @@ class TestSem(IsolatedAsyncioTestCase):
         )
         await self.sem1.reset()
 
+    async def test_block_timeout(self):
+        sem1 = Semaphore(
+            1,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            "TESTRAISEBLOCKSEM",
+        )
+        sem2 = Semaphore(
+            1,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            "TESTRAISEBLOCKSEM",
+        )
+        await sem1.acquire()
+        with self.assertRaises(NotAvailable):
+            await sem2.acquire(timeout=2)
+        await sem1.aclose()
+
     async def test_wrongvalue(self):
         with self.assertRaises(ValueError):
             sem = Semaphore(
@@ -115,6 +131,16 @@ class TestSem(IsolatedAsyncioTestCase):
         self.assertEquals(len(sem._local_tokens), 0)
         self.assertEquals(await sem.available_count, 2)
         await sem.reset()
+
+    async def test_aclose(self):
+        c = Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD"))
+        lock1 = Semaphore(2, c, namespace="ACLOSESEM")
+        await lock1.acquire()
+        self.assertTrue(await c.exists("ACLOSESEM:EXISTS"))
+        await lock1.aclose()
+        self.assertFalse(await c.exists("ACLOSESEM:EXISTS"))
+        self.assertFalse(await c.exists("ACLOSESEM:GRABBED"))
+        self.assertFalse(await c.exists("ACLOSESEM:AVAILABLE"))
 
     async def asyncTearDown(self) -> None:
         await self.sem1.reset()

@@ -3,7 +3,7 @@ Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
 from enum import IntEnum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional
 
 from redis.asyncio import Redis
 
@@ -22,10 +22,11 @@ from redislocks.utils import ensure_bytes, ensure_str
 class LockState(IntEnum):
     empty = 0  # 空
     reading = 1  # 只有读锁
-    writing = 2  # 只有写锁
-    waiting_write = 3  # 有读锁，还有写锁在等待队列，因此此时不能继续获取读锁
+    writing = 2  # 有写锁
+    waiting_write = 3  # 有读锁，没有写锁，但是有写锁在等待队列，因此此时不能继续获取读锁
 
 
+# fixme 如果A获取锁，B获取的时候认为A超时给A释放了，此时AB同时持有锁。当前不允许超时机制
 class RWLock:
     """
     Redis内存视图
@@ -84,12 +85,13 @@ class RWLock:
         self._listen_task = asyncio.create_task(self._listen_events())
 
     def __del__(self):
-        self._listen_task.cancel()
-        # try:
-        #     await self._listen_task
-        # except asyncio.CancelledError:
-        #     pass
-        self._listen_task = None
+        if self._listen_task is not None:
+            self._listen_task.cancel()
+            # try:
+            #     await self._listen_task
+            # except asyncio.CancelledError:
+            #     pass
+            self._listen_task = None
 
     async def _exists_or_init(self) -> None:
         # await self.client.config_set("notify-keyspace-events", "Ag$lshzxeKEtmdn") todo 需要修改配置吗
@@ -111,7 +113,15 @@ class RWLock:
         self._write_waiters.clear()
         self._local_readtokens.clear()
         self._local_writetoken = None
-        await self.client.delete(self.check_exists_key, self.read_key, self.write_key, self.write_waiter_key)
+        self._listen_task.cancel()
+        try:
+            await self._listen_task
+        except asyncio.CancelledError:
+            pass
+        self._listen_task = None
+        await self.client.delete(
+            self.check_exists_key, self.read_key, self.write_key, self.write_waiter_key
+        )
         await self.client.aclose()
 
     async def release_all(self):
@@ -183,13 +193,19 @@ class RWLock:
             if not await self._unlockread_script(
                 [self.namespace, token]
             ):  # 什么都没srem出来，本地token有问题还是云端释放了？
-                raise ValueError("No lock is released. Is redis changed?")
+                raise ValueError(
+                    "No lock is released. Is it released by a timeout checker?"
+                )
         elif mode == "w":
             if self._local_writetoken is None:
                 raise ValueError("can not release write lock without acquire it")
-            if not await self._unlockwrite_script([self.namespace]): # todo 如果加入超时机制的话 这里需要检查远程的write_key与self._local_writetoken是否对的上
+            if not await self._unlockwrite_script(
+                [self.namespace]
+            ):  # todo 如果加入超时机制的话 这里需要检查远程的write_key与self._local_writetoken是否对的上
                 # 如果对不上就是那个已经被超时检查器给释放了 读token扼要检查 没在set里面也是被超时检查器给释放了
-                raise ValueError("can not release write lock without acquire it")
+                raise ValueError(
+                    "No lock is released. Is it released by a timeout checker?"
+                )
             self._local_writetoken = None
         else:
             raise ValueError("mode must be 'r' or 'w'")
