@@ -96,7 +96,19 @@ class Semaphore:
                 raise NotAvailable
 
         self._local_tokens.append(token)
-        await self.client.hset(self.grabbed_key, token, await self.current_time)  # type: ignore
+        # 已经到了这一步了，可万万不能被取消，否则会破坏状态机，致敬传奇耐取消王
+        err = None
+        while True:
+            try:
+                await self.client.hset(self.grabbed_key, token, await self.current_time)  # type: ignore
+                break
+            except asyncio.CancelledError as e:
+                err = e
+        if err is not None:
+            try:
+                raise err
+            finally:
+                err = None  # 打破循环引用
         if target is not None:
             try:
                 if asyncio.iscoroutinefunction(target):
@@ -105,6 +117,7 @@ class Semaphore:
                     target(token)
             finally:
                 self._local_tokens.remove(token)
+                # await asyncio.shield(self.signal(token))
                 await self.signal(token)
         return token
 

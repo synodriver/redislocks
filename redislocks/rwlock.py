@@ -94,8 +94,10 @@ class RWLock:
             self._listen_task = None
 
     async def _exists_or_init(self) -> None:
-        # await self.client.config_set("notify-keyspace-events", "Ag$lshzxeKEtmdn") todo 需要修改配置吗
-        await self.client.setnx(self.check_exists_key, self.exists_val)
+        if await self.client.set(self.check_exists_key, self.exists_val, nx=True):
+            await self.client.config_set(
+                "notify-keyspace-events", "Ag$lshzxeKEtmdn"
+            )  # todo 需要修改配置吗
 
     async def reset(self):
         """
@@ -169,8 +171,19 @@ class RWLock:
                 except asyncio.CancelledError:
                     # 如果在这期间正好写锁轮了一下，write_waiter_key又上位了，lrem不到了，那就糟糕了
                     # 写一个cancellockwrite.lua，KEYS = [namespace, 要取消的token]，先lrem，没删除到就是这期间写锁轮了一下，上位了
-                    # 可惜太晚了，还是要删掉，就如同unlockwrite.lua做的那样释放了先
-                    await self._cancellockwrite_script([self.namespace, token])
+                    # 可惜太晚了，还是必须要删掉，就如同unlockwrite.lua做的那样释放了先，致敬传奇耐取消王
+                    err = None
+                    while True:
+                        try:
+                            await self._cancellockwrite_script([self.namespace, token])
+                            break
+                        except asyncio.CancelledError as e:
+                            err = e
+                    if err is not None:
+                        try:
+                            raise err
+                        finally:
+                            err = None
                     # await self.client.lrem(
                     #     self.write_waiter_key, 1, token
                     # )  # type: ignore
@@ -190,12 +203,16 @@ class RWLock:
                 token = self._local_readtokens.pop()
             except IndexError:  # 空list？
                 raise ValueError("can not release more than acquire")
-            if not await self._unlockread_script(
-                [self.namespace, token]
-            ):  # 什么都没srem出来，本地token有问题还是云端释放了？
-                raise ValueError(
-                    "No lock is released. Is it released by a timeout checker?"
-                )
+            try:
+                if not await self._unlockread_script(
+                    [self.namespace, token]
+                ):  # 什么都没srem出来，本地token有问题还是云端释放了？
+                    raise ValueError(
+                        "No lock is released. Is it released by a timeout checker?"
+                    )
+            except asyncio.CancelledError:
+                self._local_readtokens.append(token)  # 别在这取消啊
+                raise
         elif mode == "w":
             if self._local_writetoken is None:
                 raise ValueError("can not release write lock without acquire it")
