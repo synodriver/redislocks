@@ -172,6 +172,7 @@ class RWLock:
                     # 如果在这期间正好写锁轮了一下，write_waiter_key又上位了，lrem不到了，那就糟糕了
                     # 写一个cancellockwrite.lua，KEYS = [namespace, 要取消的token]，先lrem，没删除到就是这期间写锁轮了一下，上位了
                     # 可惜太晚了，还是必须要删掉，就如同unlockwrite.lua做的那样释放了先，致敬传奇耐取消王
+                    # shield不可取，其使得真正的task在后台执行，而外部caller就返回了，这里就是要让caller卡在这，状态不变回来不能返回，因此不能shield起来当缩头乌龟
                     err = None
                     while True:
                         try:
