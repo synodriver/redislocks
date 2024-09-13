@@ -217,3 +217,40 @@ class Lock:
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self.release()
         return True if exc_type is None else False
+
+
+class Single:
+    def __init__(
+        self,
+        client: Optional[Redis] = None,
+        namespace: str = "SINGLE",
+        timeout: Optional[int] = None,
+    ):
+        """
+
+        :param client: redis client
+        :param namespace: lock name in redis
+        :param timeout: ms
+        """
+        self.client = client
+        self.namespace = namespace
+        self.timeout = timeout  # ms
+
+        self._acquired = False
+
+    async def acquire(self):
+        """
+
+        :return: False的话，已经有别的client管这事了，直接返回就是
+        """
+        kw = {}
+        if self.timeout is not None:
+            kw["px"] = self.timeout
+        if await self.client.set(self.namespace, "1", nx=True, **kw):
+            self._acquired = True
+            return True
+        return False
+
+    async def release(self):
+        if self._acquired:
+            await self.client.delete(self.namespace)

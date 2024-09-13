@@ -6,7 +6,7 @@ from redis.asyncio import Redis
 
 
 class Event:
-    """Asynchronous Distribute equivalent to asyncio.Event, based oin redis.
+    """Asynchronous Distribute equivalent to asyncio.Event, based on redis.
 
     Class implementing event objects. An event manages a flag that can be set
     to true with the set() method and reset to false with the clear() method.
@@ -101,7 +101,6 @@ class Event:
         """
         if await self._wait_script([self.namespace]):
             return True
-        # fixme 要是在这里突然被set了就不好了，上面的exists得和下面的rpush进lua
         # token: str = await self.current_time  # type: ignore
         try:
             await self.client.blpop(self.waiter_pop_key)

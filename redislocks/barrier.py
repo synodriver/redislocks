@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
+import asyncio
 from enum import IntEnum
 from typing import Optional
 
 from redis.asyncio import Redis
 
-from redislocks.condition import Condition
-from redislocks.lock import Lock
+from redislocks.utils import ensure_str
+
+
+class BrokenBarrierError(RuntimeError):
+    """Barrier is broken by barrier.abort() call."""
 
 
 class _BarrierState(IntEnum):
@@ -29,29 +33,110 @@ class Barrier:
         self,
         parties: int,
         client: Optional[Redis] = None,
-        lock: Optional[Lock] = None,
         namespace: str = "BARRIER",
     ):
         """Create a barrier, initialised to 'parties' tasks."""
         if parties < 1:
             raise ValueError("parties must be > 0")
         self.client = client or Redis()
-        self._lock = lock or Lock(self.client, f"{namespace}:LOCK")
+        self.namespace = namespace
 
-        self._cond = Condition(
-            self.client, self._lock, f"{namespace}:CONDITION"
-        )  # notify all tasks when state changes
+        self._parties = parties  # 属于一个namespace的实例，此字段应该一致
+        # self._state = _BarrierState.FILLING  # 放redis NAMESPACE:STATE
+        self._count = 0  # count tasks in Barrier llen(self.waiter_key)
+        self.waiter_key = self.get_namespaced_key("WAITER")
+        self.pubsub_key = self.get_namespaced_key("PUBSUB")  # :OK :ERR
+        self.state_key = self.get_namespaced_key("STATE")
+        self._listen_task = asyncio.create_task(self._listen_events())
+        self._waiters = {}
+        self._wait_script = self.client.register_script(
+            """
+        local namespace = KEYS[1]
+        local parties = tonumber(KEYS[2])
+        local randkey = KEYS[3]
+        local waiter_key = namespace .. ":WAITER"
+        local pubsub_key = namespace .. ":PUBSUB"
+        local state_key = namespace .. ":STATE"
+        state = redis.call("SET", state_key, 0, "NX", "GET")
+        if state == nil then
+            state = 0
+        end
+        local current_len = redis.call("LLEN", waiter_key)
+        redis.call("RPUSH", waiter_key, randkey)
+        if (current_len+1)==parties then
+            redis.call("SET", state_key, 1)
+            while true do
+                local token = redis.call("LPOP", waiter_key)
+                if not token then
+                    break
+                end
+                redis.call("PUBLISH", pubsub_key..":OK", token)
+            end
+        end
+        return current_len
+        """
+        )
+        self._abort_script = self.client.register_script(
+            """
+            local namespace = KEYS[1]
+            local err = tonumber(KEYS[2])
+            local should_set = tonumber(KEYS[3])
+            local waiter_key = namespace .. ":WAITER"
+            local pubsub_key = namespace .. ":PUBSUB"
+            local state_key = namespace .. ":STATE"
+            if err==1 then
+                local suffix = ":ERR"
+                if should_set==1 then
+                    redis.call("SET", state_key, 3)
+                end
+            else
+                local suffix = ":OK"
+            end
+            
+            while true do
+                local token = redis.call("LPOP", waiter_key)
+                if not token then
+                    break
+                end
+                redis.call("PUBLISH", pubsub_key..suffix, token)
+            end
+            """
+        )
 
-        self._parties = parties
-        self._state = _BarrierState.FILLING
-        self._count = 0  # count tasks in Barrier
-
-    def __repr__(self):
-        res = super().__repr__()
-        extra = f"{self._state.value}"
-        if not self.broken:
-            extra += f", waiters:{self.n_waiting}/{self.parties}"
-        return f"<{res[1:-1]} [{extra}]>"
+    # def __repr__(self):
+    #     res = super().__repr__()
+    #     extra = f"{self._state.value}"
+    #     if not self.broken:
+    #         extra += f", waiters:{self.n_waiting}/{self.parties}"
+    #     return f"<{res[1:-1]} [{extra}]>"
+    async def _listen_events(self):
+        """
+        监听redis中的key变动 从而知道什么时候可以获取锁 要抛出异常，必须使用这种
+        :return:
+        """
+        async with self.client.pubsub() as pubsub:
+            await pubsub.psubscribe(
+                f"{self.pubsub_key}*",
+            )  # pattern支持set_excption，如果channel不一样
+            async for event in pubsub.listen():
+                if (
+                    ensure_str(event["type"]) == "message"
+                    and ensure_str(event["channel"]) == f"{self.pubsub_key}:OK"
+                ):
+                    token = ensure_str(event["data"])
+                    if token in self._waiters:
+                        waiter = self._waiters[token]
+                        waiter.set_result(None)
+                if (
+                    ensure_str(event["type"]) == "message"
+                    and ensure_str(event["channel"]) == f"{self.pubsub_key}:ERR"
+                ):
+                    token = ensure_str(event["data"])
+                    if token in self._waiters:
+                        waiter = self._waiters[token]
+                        waiter.set_exception(
+                            BrokenBarrierError("Abort or reset of barrier")
+                        )
 
     async def __aenter__(self):
         # wait for the barrier reaches the parties number
@@ -68,62 +153,33 @@ class Barrier:
         simultaneously awoken.
         Returns an unique and individual index number from 0 to 'parties-1'.
         """
-        async with self._cond:
-            await self._block()  # Block while the barrier drains or resets.
-            try:
-                index = self._count
-                self._count += 1
-                if index + 1 == self._parties:
-                    # We release the barrier
-                    await self._release()
-                else:
-                    await self._wait()
-                return index
-            finally:
-                self._count -= 1
-                # Wake up any tasks waiting for barrier to drain.
-                self._exit()
-
-    async def _block(self):
-        # Block until the barrier is ready for us,
-        # or raise an exception if it is broken.
-        #
-        # It is draining or resetting, wait until done
-        # unless a CancelledError occurs
-        await self._cond.wait_for(
-            lambda: self._state not in (_BarrierState.DRAINING, _BarrierState.RESETTING)
-        )
-
-        # see if the barrier is in a broken state
-        if self._state is _BarrierState.BROKEN:
-            raise exceptions.BrokenBarrierError("Barrier aborted")
-
-    async def _release(self):
-        # Release the tasks waiting in the barrier.
-
-        # Enter draining state.
-        # Next waiting tasks will be blocked until the end of draining.
-        self._state = _BarrierState.DRAINING
-        self._cond.notify_all()
-
-    async def _wait(self):
-        # Wait in the barrier until we are released. Raise an exception
-        # if the barrier is reset or broken.
-
-        # wait for end of filling
-        # unless a CancelledError occurs
-        await self._cond.wait_for(lambda: self._state is not _BarrierState.FILLING)
-
-        if self._state in (_BarrierState.BROKEN, _BarrierState.RESETTING):
-            raise exceptions.BrokenBarrierError("Abort or reset of barrier")
-
-    def _exit(self):
-        # If we are the last tasks to exit the barrier, signal any tasks
-        # waiting for the barrier to drain.
-        if self._count == 0:
-            if self._state in (_BarrierState.RESETTING, _BarrierState.DRAINING):
-                self._state = _BarrierState.FILLING
-            self._cond.notify_all()
+        fut = asyncio.get_running_loop().create_future()
+        token = await self.current_time  # type: ignore
+        try:
+            self._waiters[token] = fut
+            current_len = await self._wait_script(
+                [self.namespace, self._parties, token]
+            )
+            await fut
+            return current_len
+        except asyncio.CancelledError:
+            err = None
+            while True:
+                try:
+                    await self.client.lrem(
+                        self.waiter_key, 1, token
+                    )  # notify就是pub个东西 后台有task pubsub
+                    break
+                except asyncio.CancelledError as e:
+                    err = e
+            if err is not None:
+                try:
+                    raise err
+                finally:
+                    err = None
+            raise
+        finally:
+            del self._waiters[token]
 
     async def reset(self):
         """Reset the barrier to the initial state.
@@ -131,14 +187,7 @@ class Barrier:
         Any tasks currently waiting will get the BrokenBarrier exception
         raised.
         """
-        async with self._cond:
-            if self._count > 0:
-                if self._state is not _BarrierState.RESETTING:
-                    # reset the barrier, waking up tasks
-                    self._state = _BarrierState.RESETTING
-            else:
-                self._state = _BarrierState.FILLING
-            self._cond.notify_all()
+        await self._abort_script([self.namespace, 1, 0])
 
     async def abort(self):
         """Place the barrier into a 'broken' state.
@@ -146,9 +195,7 @@ class Barrier:
         Useful in case of error.  Any currently waiting tasks and tasks
         attempting to 'wait()' will have BrokenBarrierError raised.
         """
-        async with self._cond:
-            self._state = _BarrierState.BROKEN
-            self._cond.notify_all()
+        await self._abort_script([self.namespace, 1, 1])
 
     @property
     def parties(self):
@@ -156,13 +203,28 @@ class Barrier:
         return self._parties
 
     @property
-    def n_waiting(self):
+    async def n_waiting(self):
         """Return the number of tasks currently waiting at the barrier."""
-        if self._state is _BarrierState.FILLING:
-            return self._count
-        return 0
+        return await self.client.llen(self.waiter_key)
 
     @property
-    def broken(self):
+    async def broken(self) -> _BarrierState:
         """Return True if the barrier is in a broken state."""
-        return self._state is _BarrierState.BROKEN
+        return await self.client.get(self.state_key)
+
+    @property
+    async def current_time(self) -> str:
+        return ".".join(map(str, await self.client.time()))
+
+    def get_namespaced_key(self, suffix):
+        return "{0}:{1}".format(self.namespace, suffix)
+
+    async def aclose(self):
+        self._listen_task.cancel()
+        try:
+            await self._listen_task
+        except asyncio.CancelledError:
+            pass
+        self._listen_task = None
+        await self.reset()
+        await self.client.aclose()

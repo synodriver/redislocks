@@ -126,7 +126,7 @@ class Condition:
                 # await self.client.blpop(self.waiter_pop_key) # fixme pop到别人的token怎么办
                 # return True
             except asyncio.CancelledError:
-                err = None  # fixme 这里也可能浪费notify  fut完成而被cancel
+                err = None  # fixme 这里也可能浪费notify  fut完成而被cancel,或者未完成而被cancel，正好错过一次pub
                 while True:
                     try:
                         await self.client.lrem(
@@ -200,9 +200,13 @@ class Condition:
         the return value.
         """
         result = predicate()
+        if asyncio.iscoroutine(result):
+            result = await result
         while not result:
             await self.wait()
             result = predicate()
+            if asyncio.iscoroutine(result):
+                result = await result
         return result
 
     async def notify(self, n=1):
@@ -222,7 +226,7 @@ class Condition:
         await self._notify(n)
 
     async def _notify(self, n):
-        await self._notify_script([self.namespace, n])  # fixme lpop从waiter，然后pub
+        await self._notify_script([self.namespace, n])
 
     async def notify_all(self):
         """Wake up all tasks waiting on this condition. This method acts
@@ -241,7 +245,8 @@ class Condition:
         return ".".join(map(str, await self.client.time()))
 
     async def reset(self):
-        await self.client.delete(self.waiter_key, self.waiter_pop_key)
+        await self._lock.reset()
+        await self.client.delete(self.waiter_key)
 
     async def aclose(self):
         self._listen_task.cancel()
@@ -251,4 +256,9 @@ class Condition:
             pass
         self._listen_task = None
         await self.reset()
-        await self.client.aclose()
+        await self._lock.aclose()
+
+    def __del__(self):
+        if self._listen_task is not None:
+            self._listen_task.cancel()
+            self._listen_task = None
