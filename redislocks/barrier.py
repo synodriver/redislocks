@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 from enum import IntEnum
-from typing import Optional
+from typing import Optional, Dict
 
 from redis.asyncio import Redis
 
@@ -15,7 +15,7 @@ class BrokenBarrierError(RuntimeError):
 class _BarrierState(IntEnum):
     FILLING = 0
     DRAINING = 1
-    RESETTING = 2
+    RESETTING = 2 # never, actually impossible
     BROKEN = 3
 
 
@@ -48,33 +48,33 @@ class Barrier:
         self.pubsub_key = self.get_namespaced_key("PUBSUB")  # :OK :ERR
         self.state_key = self.get_namespaced_key("STATE")
         self._listen_task = asyncio.create_task(self._listen_events())
-        self._waiters = {}
+        self._waiters = {}  # type: Dict[str, asyncio.Future]
         self._wait_script = self.client.register_script(
             """
-        local namespace = KEYS[1]
-        local parties = tonumber(KEYS[2])
-        local randkey = KEYS[3]
-        local waiter_key = namespace .. ":WAITER"
-        local pubsub_key = namespace .. ":PUBSUB"
-        local state_key = namespace .. ":STATE"
-        state = redis.call("SET", state_key, 0, "NX", "GET")
-        if state == nil then
-            state = 0
-        end
-        local current_len = redis.call("LLEN", waiter_key)
-        redis.call("RPUSH", waiter_key, randkey)
-        if (current_len+1)==parties then
-            redis.call("SET", state_key, 1)
-            while true do
-                local token = redis.call("LPOP", waiter_key)
-                if not token then
-                    break
-                end
-                redis.call("PUBLISH", pubsub_key..":OK", token)
+            local namespace = KEYS[1]
+            local parties = tonumber(KEYS[2])
+            local randkey = KEYS[3]
+            local waiter_key = namespace .. ":WAITER"
+            local pubsub_key = namespace .. ":PUBSUB"
+            local state_key = namespace .. ":STATE"
+            local state = redis.call("SET", state_key, 0, "NX", "GET")
+            if state == nil then
+                state = 0
             end
-        end
-        return current_len
-        """
+            local current_len = redis.call("LLEN", waiter_key)
+            redis.call("RPUSH", waiter_key, randkey)
+            if (current_len+1)==parties then
+                redis.call("SET", state_key, 1)
+                while true do
+                    local token = redis.call("LPOP", waiter_key)
+                    if not token then
+                        break
+                    end
+                    redis.call("PUBLISH", pubsub_key..":OK", token)
+                end
+            end
+            return current_len
+            """
         )
         self._abort_script = self.client.register_script(
             """
@@ -84,13 +84,14 @@ class Barrier:
             local waiter_key = namespace .. ":WAITER"
             local pubsub_key = namespace .. ":PUBSUB"
             local state_key = namespace .. ":STATE"
+            local suffix = ""
             if err==1 then
-                local suffix = ":ERR"
+                suffix = ":ERR"
                 if should_set==1 then
                     redis.call("SET", state_key, 3)
                 end
             else
-                local suffix = ":OK"
+                suffix = ":OK"
             end
             
             while true do
@@ -120,7 +121,7 @@ class Barrier:
             )  # pattern支持set_excption，如果channel不一样
             async for event in pubsub.listen():
                 if (
-                    ensure_str(event["type"]) == "message"
+                    ensure_str(event["type"]) == "pmessage"
                     and ensure_str(event["channel"]) == f"{self.pubsub_key}:OK"
                 ):
                     token = ensure_str(event["data"])
@@ -128,7 +129,7 @@ class Barrier:
                         waiter = self._waiters[token]
                         waiter.set_result(None)
                 if (
-                    ensure_str(event["type"]) == "message"
+                    ensure_str(event["type"]) == "pmessage"
                     and ensure_str(event["channel"]) == f"{self.pubsub_key}:ERR"
                 ):
                     token = ensure_str(event["data"])
@@ -188,6 +189,7 @@ class Barrier:
         raised.
         """
         await self._abort_script([self.namespace, 1, 0])
+        await self.client.delete(self.state_key)
 
     async def abort(self):
         """Place the barrier into a 'broken' state.
@@ -208,9 +210,9 @@ class Barrier:
         return await self.client.llen(self.waiter_key)
 
     @property
-    async def broken(self) -> _BarrierState:
+    async def broken(self) -> bool:
         """Return True if the barrier is in a broken state."""
-        return await self.client.get(self.state_key)
+        return int(await self.client.get(self.state_key) or 0) == _BarrierState.BROKEN
 
     @property
     async def current_time(self) -> str:

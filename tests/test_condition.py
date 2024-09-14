@@ -183,5 +183,9 @@ class TestCondition(IsolatedAsyncioTestCase):
             await condition.notify_all()
         await c[1]
 
+    async def test_aclose(self):
+        cond1 = Condition(self.client2)
+        await cond1.aclose()
+
     async def asyncTearDown(self):
         await self.cond1.reset()
