@@ -1,0 +1,146 @@
+# -*- coding: utf-8 -*-
+"""
+Copyright (c) 2008-2024 synodriver <diguohuangjiajinweijun@gmail.com>
+"""
+import asyncio
+from asyncio import Queue as AIOQueue
+from typing import Any, Dict, Optional
+
+from redis.asyncio import Redis
+
+from redislocks.utils import ensure_str
+
+
+class Queue:
+    """
+    queue uses blpop
+    """
+
+    def __init__(self, client: Optional[Redis] = None, namespace: str = "QUEUE"):
+        self.client = client or Redis()
+        self.namespace = namespace
+
+    async def put(self, value):
+        await self.client.rpush(self.namespace, value)
+
+    async def get(self):
+        pair = await self.client.blpop(self.namespace)
+        return pair[1]
+
+    async def empty(self) -> bool:
+        return await self.qsize() == 0  # type: ignore
+
+    async def qsize(self):
+        return await self.client.llen(self.namespace)
+
+
+class BroadcastQueue(Queue):
+    def __init__(
+        self, client: Optional[Redis] = None, namespace: str = "BROADCASTQUEUE"
+    ):
+        super().__init__(client, namespace)
+        self._listen_task = asyncio.create_task(self._listen_events())
+        self._queue = AIOQueue()  # type: AIOQueue
+
+    async def _listen_events(self):
+        async with self.client.pubsub() as pubsub:
+            await pubsub.subscribe(
+                f"{self.namespace}",
+            )
+            async for event in pubsub.listen():
+                if (
+                    ensure_str(event["type"]) == "message"
+                    and ensure_str(event["channel"]) == self.namespace
+                ):
+                    data = ensure_str(event["data"])
+                    await self._queue.put(data)
+
+    def __del__(self):
+        if self._listen_task is not None:
+            self._listen_task.cancel()
+            self._listen_task = None
+
+    async def aclose(self):
+        self._listen_task.cancel()
+        try:
+            await self._listen_task
+        except asyncio.CancelledError:
+            pass
+        self._listen_task = None
+        await self.client.aclose()
+
+    async def put(self, value):
+        """
+        自己发的自己也能收到，很正常
+        :param value:
+        :return:
+        """
+        await self.client.publish(self.namespace, value)
+
+    async def get(self):
+        return await self._queue.get()
+
+    async def empty(self) -> bool:
+        return self._queue.empty()
+
+    async def qsize(self):
+        return self._queue.qsize()
+
+
+class Stream:
+    """
+    use redis's stream api
+    """
+
+    def __init__(
+        self,
+        client: Optional[Redis] = None,
+        namespace: str = "STREAM",
+        maxlen: int = 100,
+        last_id: Optional[str] = None,
+    ):
+        self.client = client or Redis()
+        self.namespace = namespace
+        self.maxlen = maxlen
+        self.last_id = last_id or "0-0"
+
+    async def put(self, value: dict):
+        if not isinstance(value, dict):
+            raise TypeError("value must be dict")
+        return await self.client.xadd(
+            self.namespace, value, maxlen=self.maxlen, approximate=False
+        )
+
+    async def get(self, id_=None):
+        data = await self.client.xread({self.namespace: id_ or self.last_id}, 1, 0)
+        if isinstance(data, list):
+            self.last_id = ensure_str(data[0][1][0][0])
+            return data[0][1][0][1]
+        else:  # resp 3 dict
+            self.last_id = ensure_str(list(data.values())[0][0][0][0])
+            return list(data.values())[0][0][0][1]
+
+    async def qsize(self):
+        return await self.client.xlen(self.namespace)
+
+    async def empty(self) -> bool:
+        return await self.qsize() == 0
+
+    async def trim(
+        self,
+        maxlen: Optional[int] = None,
+        minid: Optional[int] = None,
+        limit: Optional[int] = None,
+        approximate: Optional[bool] = False,
+    ):
+        kw = {"approximate": approximate}  # type: Dict[str, Any]
+        if maxlen is not None:
+            kw["maxlen"] = maxlen
+        else:
+            kw["minid"] = minid or self.last_id
+        if limit is not None:
+            kw["limit"] = limit
+        return await self.client.xtrim(self.namespace, **kw)  # type: ignore
+
+    async def delete(self, ids):
+        return await self.client.xdel(self.namespace, ids)

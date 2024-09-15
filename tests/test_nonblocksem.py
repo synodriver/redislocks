@@ -43,6 +43,37 @@ class TestSem(IsolatedAsyncioTestCase):
         await self.sem1.reset()
 
 
+class TestSemResp3(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.sem1 = Semaphore(
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD"), protocol=3),
+            blocking=False,
+        )
+        self.sem2 = Semaphore(
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD"), protocol=3),
+            blocking=False,
+        )
+        await self.sem1.reset()
+
+    async def test_acquire(self):
+        await self.sem1.acquire()
+        self.assertTrue(await self.sem1.has_token())
+        await self.sem1.release()
+        self.assertFalse(await self.sem1.has_token())
+        await self.sem1.reset()
+
+    async def test_raise(self):
+        await self.sem1.acquire()
+        await self.sem1.acquire()
+        with self.assertRaises(NotAvailable):
+            await self.sem2.acquire()
+
+    async def asyncTearDown(self) -> None:
+        await self.sem1.reset()
+
+
 if __name__ == "__main__":
     import unittest
 

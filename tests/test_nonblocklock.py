@@ -66,6 +66,63 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.client1.delete("RWLOCK:READ", "RWLOCK:WRITE", "RWLOCK:WRITEWAITER")
 
 
+class TestLockResp3(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.client1 = Redis(
+            host=os.getenv("REDIS"), password=os.getenv("PASSWORD"), protocol=3
+        )
+        self.client2 = Redis(
+            host=os.getenv("REDIS"), password=os.getenv("PASSWORD"), protocol=3
+        )
+        self.lock1 = RWLock(self.client1, blocking=False)
+        self.lock2 = RWLock(self.client2, blocking=False)
+        await self.client1.config_set("notify-keyspace-events", "Ag$lshzxeKEtmdn")
+        await self.client1.delete("RWLOCK:READ", "RWLOCK:WRITE", "RWLOCK:WRITEWAITER")
+
+    async def test_havelock(self):
+        await self.lock1.acquire("r")
+        self.assertTrue(await self.lock1.has_token("r"))
+        await self.lock1.acquire("r")
+        self.assertTrue(await self.lock1.has_token("r"))
+        self.assertTrue(await self.lock2.locked("w"))
+        await self.lock1.release("r")
+        await self.lock1.release("r")
+        self.assertFalse(await self.lock1.has_token("r"))
+        print(await self.client1.keys("*"))
+        self.assertFalse(await self.lock2.has_token("r"))
+
+    async def test_read_read(self):
+        await self.lock1.acquire("r")
+        await asyncio.wait_for(self.lock2.acquire("r"), 1)
+        await self.lock1.release("r")
+        await self.lock2.release("r")
+        print(await self.client1.keys("*"))
+
+    async def test_write_write(self):
+        await self.lock1.acquire("w")
+        with self.assertRaises(NotAvailable):
+            await self.lock2.acquire("w")
+        await self.lock1.release("w")
+        print(await self.client1.keys("*"))
+
+    async def test_write_read(self):
+        await self.lock1.acquire("w")
+        with self.assertRaises(NotAvailable):
+            await self.lock2.acquire("r")
+        await self.lock1.release("w")
+        print(await self.client1.keys("*"))
+
+    async def test_read_write(self):
+        await self.lock1.acquire("r")
+        with self.assertRaises(NotAvailable):
+            await self.lock2.acquire("w")
+        await self.lock1.release("r")
+        print(await self.client1.keys("*"))
+
+    async def asyncTearDown(self) -> None:
+        await self.client1.delete("RWLOCK:READ", "RWLOCK:WRITE", "RWLOCK:WRITEWAITER")
+
+
 if __name__ == "__main__":
     import unittest
 

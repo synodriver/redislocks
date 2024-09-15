@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 from enum import IntEnum
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 from redis.asyncio import Redis
 
@@ -15,7 +15,7 @@ class BrokenBarrierError(RuntimeError):
 class _BarrierState(IntEnum):
     FILLING = 0
     DRAINING = 1
-    RESETTING = 2 # never, actually impossible
+    RESETTING = 2  # never, actually impossible
     BROKEN = 3
 
 
