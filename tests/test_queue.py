@@ -41,7 +41,19 @@ class TestQueue(IsolatedAsyncioTestCase):
         self.assertEquals(await q2.qsize(), 0)
         await self.client1.delete("QUEUE")
 
+    async def test_queue_timeout(self):
+        await self.client1.delete("QUEUE")
+        q1 = Queue(self.client1)
+        q2 = Queue(self.client1)
+        self.assertTrue(await q1.empty())
+        self.assertTrue(await q2.empty())
+        self.assertEquals(await q1.qsize(), 0)
+        self.assertEquals(await q2.qsize(), 0)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(q2.get(), 1)
+
     async def test_bqueue_put_get(self):
+        await self.client1.delete("BROADCASTQUEUE")
         b1 = BroadcastQueue(self.client1)
         b2 = BroadcastQueue(self.client2)
         await asyncio.sleep(0.5)
@@ -63,6 +75,18 @@ class TestQueue(IsolatedAsyncioTestCase):
         self.assertTrue(await b2.empty())
         self.assertEquals(await b1.qsize(), 0)
         self.assertEquals(await b2.qsize(), 0)
+
+    async def test_bqueue_timeout(self):
+        await self.client1.delete("BROADCASTQUEUE")
+        b1 = BroadcastQueue(self.client1)
+        b2 = BroadcastQueue(self.client2)
+        await asyncio.sleep(0.5)
+        self.assertTrue(await b1.empty())
+        self.assertTrue(await b2.empty())
+        self.assertEquals(await b1.qsize(), 0)
+        self.assertEquals(await b2.qsize(), 0)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(b2.get(), 1)
 
     async def test_stream_put_get(self):
         await self.client1.delete("STREAM")
@@ -105,6 +129,18 @@ class TestQueue(IsolatedAsyncioTestCase):
         self.assertEquals(await s2.qsize(), 1)
         self.assertFalse(await s1.empty())
         self.assertFalse(await s2.empty())
+
+    async def test_stream_timeout(self):
+        await self.client1.delete("STREAM")
+        s1 = Stream(self.client1)
+        s2 = Stream(self.client2)
+        await asyncio.sleep(0.5)
+        self.assertEquals(await s1.qsize(), 0)
+        self.assertEquals(await s2.qsize(), 0)
+        self.assertTrue(await s1.empty())
+        self.assertTrue(await s2.empty())
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(s2.get(), 1)
 
 
 class TestQueueResp3(IsolatedAsyncioTestCase):
@@ -136,7 +172,19 @@ class TestQueueResp3(IsolatedAsyncioTestCase):
         self.assertEquals(await q2.qsize(), 0)
         await self.client1.delete("QUEUE")
 
+    async def test_queue_timeout(self):
+        await self.client1.delete("QUEUE")
+        q1 = Queue(self.client1)
+        q2 = Queue(self.client1)
+        self.assertTrue(await q1.empty())
+        self.assertTrue(await q2.empty())
+        self.assertEquals(await q1.qsize(), 0)
+        self.assertEquals(await q2.qsize(), 0)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(q2.get(), 1)
+
     async def test_bqueue_put_get(self):
+        await self.client1.delete("BROADCASTQUEUE")
         b1 = BroadcastQueue(self.client1)
         b2 = BroadcastQueue(self.client2)
         await asyncio.sleep(0.5)
@@ -158,6 +206,18 @@ class TestQueueResp3(IsolatedAsyncioTestCase):
         self.assertTrue(await b2.empty())
         self.assertEquals(await b1.qsize(), 0)
         self.assertEquals(await b2.qsize(), 0)
+
+    async def test_bqueue_timeout(self):
+        await self.client1.delete("BROADCASTQUEUE")
+        b1 = BroadcastQueue(self.client1)
+        b2 = BroadcastQueue(self.client2)
+        await asyncio.sleep(0.5)
+        self.assertTrue(await b1.empty())
+        self.assertTrue(await b2.empty())
+        self.assertEquals(await b1.qsize(), 0)
+        self.assertEquals(await b2.qsize(), 0)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(b2.get(), 1)
 
     async def test_stream_put_get(self):
         await self.client1.delete("STREAM")
@@ -200,6 +260,18 @@ class TestQueueResp3(IsolatedAsyncioTestCase):
         self.assertEquals(await s2.qsize(), 1)
         self.assertFalse(await s1.empty())
         self.assertFalse(await s2.empty())
+
+    async def test_stream_timeout(self):
+        await self.client1.delete("STREAM")
+        s1 = Stream(self.client1)
+        s2 = Stream(self.client2)
+        await asyncio.sleep(0.5)
+        self.assertEquals(await s1.qsize(), 0)
+        self.assertEquals(await s2.qsize(), 0)
+        self.assertTrue(await s1.empty())
+        self.assertTrue(await s2.empty())
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(s2.get(), 1)
 
 
 if __name__ == "__main__":
