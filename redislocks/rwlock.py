@@ -8,15 +8,7 @@ from typing import Dict, List, Literal, Optional
 from redis.asyncio import Redis
 
 from redislocks.exceptions import NotAvailable
-from redislocks.scripts import (
-    cancellockwrite_script,
-    get_state_script,
-    lockread_script,
-    lockwrite_script,
-    unlockread_script,
-    unlockwrite_script,
-)
-from redislocks.utils import ensure_bytes, ensure_str
+from redislocks.utils import ensure_str
 
 
 class LockState(IntEnum):
@@ -26,7 +18,7 @@ class LockState(IntEnum):
     waiting_write = 3  # 有读锁，没有写锁，但是有写锁在等待队列，因此此时不能继续获取读锁
 
 
-# fixme 如果A获取锁，B获取的时候认为A超时给A释放了，此时AB同时持有锁。当前不允许超时机制
+# fixme 如果A获取锁，B获取的时候认为A超时给A释放了，此时AB同时持有锁。因此当前不允许超时机制
 class RWLock:
     """
     Redis内存视图
@@ -65,21 +57,211 @@ class RWLock:
         self._write_waiters = {}  # type: Dict[str, asyncio.Future]
 
         self._lockread_script = self.client.register_script(
-            lockread_script
+            """
+-- 加读锁
+-- numkey: 1
+-- namespace
+local namespace = KEYS[1]
+--local blocking = ARGV[1] -- string
+local read_key = namespace .. ":READ"
+local write_key = namespace .. ":WRITE"
+local write_waiter_key = namespace .. ":WRITEWAITER"
+
+local function get_state()
+    local read_lock_exists = redis.call("SCARD", read_key) > 0
+    local write_lock_exists = redis.call("EXISTS", write_key) == 1
+    local write_waiter_exists = redis.call("LLEN", write_waiter_key) > 0
+    if not read_lock_exists and not write_lock_exists then -- 没有读锁也没有写锁，是空的
+        return 0
+    elseif read_lock_exists and not write_lock_exists and not write_waiter_exists then -- 存在读锁，不存在写锁和写锁等待，读ing
+        return 1
+    elseif not read_lock_exists and write_lock_exists then -- 不存在读锁，存在写锁，写ing
+        return 2
+    elseif read_lock_exists and not write_lock_exists and  write_waiter_exists then -- 存在读锁，不存在写锁，不过有等待等待队列有东西
+        return 3
+    end
+end
+
+local current_state = get_state()
+
+if current_state == 2 or current_state == 3 then
+    -- 写入状态 or 写锁正在等待等待
+    return 0 -- 直接加锁失败，此时，如果是阻塞模式，开始监听keyspace
+else
+    local time = redis.call("TIME")
+    local timestring = time[1] ..".".. time[2] -- string
+    redis.call("SADD", read_key, timestring)
+    return timestring -- 成功就返回时间戳
+end
+            """
         )  # lockread.lua
         self._unlockread_script = self.client.register_script(
-            unlockread_script
+            """
+-- 释放读锁
+-- numkey: 2
+-- namespace token
+local namespace = KEYS[1]
+local token = KEYS[2] -- read token
+local read_key = namespace .. ":READ"
+local write_key = namespace .. ":WRITE"
+local write_waiter_key = namespace .. ":WRITEWAITER"
+
+local read_lock_exists = redis.call("SCARD", read_key) > 0
+local write_lock_exists = redis.call("EXISTS", write_key) == 1
+local write_waiter_exists = redis.call("LLEN", write_waiter_key) > 0
+
+local function get_state()
+    if not read_lock_exists and not write_lock_exists then -- 没有读锁也没有写锁，是空的
+        return 0
+    elseif read_lock_exists and not write_lock_exists and not write_waiter_exists then -- 存在读锁，不存在写锁和写锁等待，读ing
+        return 1
+    elseif not read_lock_exists and write_lock_exists then -- 不存在读锁，存在写锁，写ing
+        return 2
+    elseif read_lock_exists and not write_lock_exists and  write_waiter_exists then -- 存在读锁，不存在写锁，不过有等待等待队列有东西
+        return 3
+    end
+end
+
+local current_state = get_state()
+
+local ret = redis.call("SREM", read_key, token)
+if redis.call("SCARD", read_key) == 0 and current_state == 3 then
+    --读锁空了，有人在等写锁，且写锁现在还不存在， 那去掉读锁的过程就帮他们轮一下写锁
+    local write_token = redis.call("LPOP", write_waiter_key)
+    redis.call("SET", write_key, write_token)
+end
+
+return ret
+            """
         )  # unlockread.lua
         self._lockwrite_script = self.client.register_script(
-            lockwrite_script
+            """
+-- 加写锁 直接设置不检查
+-- numkey: 1
+-- namespace
+local namespace = KEYS[1]
+local read_key = namespace .. ":READ"
+local write_key = namespace .. ":WRITE"
+local write_waiter_key = namespace .. ":WRITEWAITER"
+
+local function get_state()
+    local read_lock_exists = redis.call("SCARD", read_key) > 0
+    local write_lock_exists = redis.call("EXISTS", write_key) == 1
+    local write_waiter_exists = redis.call("LLEN", write_waiter_key) > 0
+    if not read_lock_exists and not write_lock_exists then -- 没有读锁也没有写锁，是空的
+        return 0
+    elseif read_lock_exists and not write_lock_exists and not write_waiter_exists then -- 存在读锁，不存在写锁和写锁等待，读ing
+        return 1
+    elseif not read_lock_exists and write_lock_exists then -- 不存在读锁，存在写锁，写ing
+        return 2
+    elseif read_lock_exists and not write_lock_exists and  write_waiter_exists then -- 存在读锁，不存在写锁，不过有等待等待队列有东西
+        return 3
+    end
+end
+
+local current_state = get_state()
+
+if current_state == 0 then
+    -- 不存在写锁 也不存在 读锁 可以直接设置写锁
+    local time = redis.call("TIME")
+    local timestring = time[1] ..".".. time[2] -- string
+    redis.call("SET", write_key, timestring)
+    return timestring -- 获取写锁成功，返回时间戳
+else
+    return 0
+end
+            """
         )  # lockwrite.lua
         self._unlockwrite_script = self.client.register_script(
-            unlockwrite_script
+            """
+-- 老写锁释放的时候带新写锁进来，或者读锁没有的时候带新写锁尽量
+-- numkey: 1
+-- namespace
+local namespace = KEYS[1]
+
+local read_key = namespace .. ":READ"
+local write_key = namespace .. ":WRITE"
+local write_waiter_key = namespace .. ":WRITEWAITER"
+
+local read_lock_exists = redis.call("SCARD", read_key) > 0
+local write_lock_exists = redis.call("EXISTS", write_key) == 1
+local write_waiter_exists = redis.call("LLEN", write_waiter_key) > 0
+
+local function get_state()
+    if not read_lock_exists and not write_lock_exists then -- 没有读锁也没有写锁，是空的
+        return 0
+    elseif read_lock_exists and not write_lock_exists and not write_waiter_exists then -- 存在读锁，不存在写锁和写锁等待，读ing
+        return 1
+    elseif not read_lock_exists and write_lock_exists then -- 不存在读锁，存在写锁，写ing
+        return 2
+    elseif read_lock_exists and not write_lock_exists and write_waiter_exists then -- 存在读锁，不存在写锁，不过有等待等待队列有东西
+        return 3
+    end
+end
+
+local current_state = get_state()
+
+if current_state == 2 then
+    if write_waiter_exists then -- 还有人在等写锁，帮他轮
+        local write_token = redis.call("LPOP", write_waiter_key)
+        redis.call("SET", write_key, write_token)
+    else --  后面没有人在等写锁了，那就删除写锁
+        redis.call("DEL", write_key)
+    end
+    return 1
+else
+    return 0
+end
+            """
         )  # unlockwrite.lua
         self._cancellockwrite_script = self.client.register_script(
-            cancellockwrite_script
+            """
+-- 取消加写锁
+-- numkey: 2
+-- namespace， token
+local namespace = KEYS[1]
+local token = KEYS[2]
+
+local write_key = namespace .. ":WRITE"
+local write_waiter_key = namespace .. ":WRITEWAITER"
+
+local write_waiter_exists = redis.call("LLEN", write_waiter_key) > 0
+
+if redis.call("LREM", write_waiter_key, 1, token) == 0 then
+    if redis.call("GET", write_key) == token then
+        if write_waiter_exists then -- 还有人在等写锁，帮他轮
+            local write_token = redis.call("LPOP", write_waiter_key)
+            redis.call("SET", write_key, write_token)
+        else --  后面没有人在等写锁了，那就删除写锁
+            redis.call("DEL", write_key)
+        end
+    end
+end
+            """
         )  # cancellockwrite.lua
-        self._get_state_script = self.client.register_script(get_state_script)
+        self._get_state_script = self.client.register_script(
+            """
+-- 检查读锁或者写锁能否立刻获取
+-- numkey: 1
+-- key: namespace
+local namespace = KEYS[1]
+local read_key = namespace .. ":READ"
+local write_key = namespace .. ":WRITE"
+local write_waiter_key = namespace .. ":WRITEWAITER"
+
+local read_lock_exists = redis.call("SCARD", read_key) > 0
+local write_lock_exists = redis.call("EXISTS", write_key) == 1
+local write_waiter_exists = redis.call("LLEN", write_waiter_key) > 0
+if not read_lock_exists and not write_lock_exists then -- 没有读锁也没有写锁，是空的
+    return 0
+elseif read_lock_exists and not write_lock_exists and not write_waiter_exists then -- 存在读锁，不存在写锁和写锁等待，读ing
+    return 1
+elseif not read_lock_exists and write_lock_exists then -- 不存在读锁，存在写锁，写ing
+    return 2
+elseif read_lock_exists and not write_lock_exists and  write_waiter_exists then -- 存在读锁，不存在写锁，不过有等待等待队列有东西
+    return 3
+end
+            """)
         self._local_readtokens = []  # type: List[str]
         self._local_writetoken = None  # type: Optional[str]
         self._listen_task = asyncio.create_task(self._listen_events())

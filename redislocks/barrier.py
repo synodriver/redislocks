@@ -19,7 +19,6 @@ class _BarrierState(IntEnum):
     BROKEN = 3
 
 
-# fixme 还没完成，他的基础库出了篓子
 class Barrier:
     """Asyncio equivalent to threading.Barrier
 
