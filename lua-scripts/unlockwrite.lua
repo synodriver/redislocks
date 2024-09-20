@@ -2,7 +2,7 @@
 -- numkey: 1
 -- namespace
 local namespace = KEYS[1]
-
+local old_token = KEYS[2]
 local read_key = namespace .. ":READ"
 local write_key = namespace .. ":WRITE"
 local write_waiter_key = namespace .. ":WRITEWAITER"
@@ -26,6 +26,9 @@ end
 local current_state = get_state()
 
 if current_state == 2 then
+    if redis.call("GET", write_key) ~= old_token then -- 这不是我的token, 谁动了我的写锁
+        return 0
+    end
     if write_waiter_exists then -- 还有人在等写锁，帮他轮
         local write_token = redis.call("LPOP", write_waiter_key)
         redis.call("SET", write_key, write_token)
