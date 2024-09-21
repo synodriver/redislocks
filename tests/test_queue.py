@@ -130,6 +130,55 @@ class TestQueue(IsolatedAsyncioTestCase):
         self.assertFalse(await s1.empty())
         self.assertFalse(await s2.empty())
 
+    async def test_stream_callback(self):
+        await self.client1.delete("STREAM")
+        s1 = Stream(self.client1)
+        lastid = None
+
+        async def cb(id_):
+            nonlocal lastid
+            lastid = id_
+
+        s2 = Stream(self.client2, on_cursor_change=cb)
+        await asyncio.sleep(0.5)
+        with self.assertRaises(TypeError):
+            await s1.put("value1")
+        self.assertEquals(await s1.qsize(), 0)
+        self.assertEquals(await s2.qsize(), 0)
+        self.assertTrue(await s1.empty())
+        self.assertTrue(await s2.empty())
+        await s1.put({"k": "value1"})
+        await asyncio.sleep(0.5)
+        self.assertEquals(await s1.qsize(), 1)
+        self.assertEquals(await s2.qsize(), 1)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+        data = await s2.get()
+        self.assertEquals(
+            ensure_str(data.get(b"k", None) or data.get("k", None)), "value1"
+        )
+        self.assertTrue(lastid is not None)
+        self.assertEquals(await s1.qsize(), 1)
+        self.assertEquals(await s2.qsize(), 1)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+        self.assertEquals(await s2.trim(), 0)
+        await s1.put({"k": "value2"})
+        await asyncio.sleep(0.5)
+        self.assertEquals(await s1.qsize(), 2)
+        self.assertEquals(await s2.qsize(), 2)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+        data = await s2.get()
+        self.assertEquals(
+            ensure_str(data.get(b"k", None) or data.get("k", None)), "value2"
+        )
+        self.assertEquals(await s2.trim(), 1)
+        self.assertEquals(await s1.qsize(), 1)
+        self.assertEquals(await s2.qsize(), 1)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+
     async def test_stream_timeout(self):
         await self.client1.delete("STREAM")
         s1 = Stream(self.client1)
@@ -240,6 +289,55 @@ class TestQueueResp3(IsolatedAsyncioTestCase):
         self.assertEquals(
             ensure_str(data.get(b"k", None) or data.get("k", None)), "value1"
         )
+        self.assertEquals(await s1.qsize(), 1)
+        self.assertEquals(await s2.qsize(), 1)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+        self.assertEquals(await s2.trim(), 0)
+        await s1.put({"k": "value2"})
+        await asyncio.sleep(0.5)
+        self.assertEquals(await s1.qsize(), 2)
+        self.assertEquals(await s2.qsize(), 2)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+        data = await s2.get()
+        self.assertEquals(
+            ensure_str(data.get(b"k", None) or data.get("k", None)), "value2"
+        )
+        self.assertEquals(await s2.trim(), 1)
+        self.assertEquals(await s1.qsize(), 1)
+        self.assertEquals(await s2.qsize(), 1)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+
+    async def test_stream_callback(self):
+        await self.client1.delete("STREAM")
+        s1 = Stream(self.client1)
+        lastid = None
+
+        async def cb(id_):
+            nonlocal lastid
+            lastid = id_
+
+        s2 = Stream(self.client2, on_cursor_change=cb)
+        await asyncio.sleep(0.5)
+        with self.assertRaises(TypeError):
+            await s1.put("value1")
+        self.assertEquals(await s1.qsize(), 0)
+        self.assertEquals(await s2.qsize(), 0)
+        self.assertTrue(await s1.empty())
+        self.assertTrue(await s2.empty())
+        await s1.put({"k": "value1"})
+        await asyncio.sleep(0.5)
+        self.assertEquals(await s1.qsize(), 1)
+        self.assertEquals(await s2.qsize(), 1)
+        self.assertFalse(await s1.empty())
+        self.assertFalse(await s2.empty())
+        data = await s2.get()
+        self.assertEquals(
+            ensure_str(data.get(b"k", None) or data.get("k", None)), "value1"
+        )
+        self.assertTrue(lastid is not None)
         self.assertEquals(await s1.qsize(), 1)
         self.assertEquals(await s2.qsize(), 1)
         self.assertFalse(await s1.empty())

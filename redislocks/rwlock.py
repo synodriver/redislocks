@@ -264,7 +264,8 @@ elseif not read_lock_exists and write_lock_exists then -- 不存在读锁，存�
 elseif read_lock_exists and not write_lock_exists and  write_waiter_exists then -- 存在读锁，不存在写锁，不过有等待等待队列有东西
     return 3
 end
-            """)
+            """
+        )
         self._local_readtokens = []  # type: List[str]
         self._local_writetoken = None  # type: Optional[str]
         self._listen_task = asyncio.create_task(self._listen_events())

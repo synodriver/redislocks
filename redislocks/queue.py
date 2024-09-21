@@ -4,7 +4,7 @@ Copyright (c) 2008-2024 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
 from asyncio import Queue as AIOQueue
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from redis.asyncio import Redis
 
@@ -98,11 +98,15 @@ class Stream:
         namespace: str = "STREAM",
         maxlen: int = 100,
         last_id: Optional[str] = None,
+        on_cursor_change: Optional[
+            Callable[[str], Union[None, Awaitable[None]]]
+        ] = None,
     ):
         self.client = client or Redis()
         self.namespace = namespace
         self.maxlen = maxlen
         self.last_id = last_id or "0-0"
+        self.on_cursor_change = on_cursor_change
 
     async def put(self, value: dict):
         if not isinstance(value, dict):
@@ -111,13 +115,21 @@ class Stream:
             self.namespace, value, maxlen=self.maxlen, approximate=False
         )
 
+    async def __run_callback(self):
+        if self.on_cursor_change is not None:
+            ret = self.on_cursor_change(self.last_id)
+            if asyncio.iscoroutine(ret):
+                await ret
+
     async def get(self, id_=None):
         data = await self.client.xread({self.namespace: id_ or self.last_id}, 1, 0)
         if isinstance(data, list):
             self.last_id = ensure_str(data[0][1][0][0])
+            await self.__run_callback()  # 保存last_id的机会，防止重复消费
             return data[0][1][0][1]
         else:  # resp 3 dict
             self.last_id = ensure_str(list(data.values())[0][0][0][0])
+            await self.__run_callback()
             return list(data.values())[0][0][0][1]
 
     async def qsize(self):
@@ -142,5 +154,5 @@ class Stream:
             kw["limit"] = limit
         return await self.client.xtrim(self.namespace, **kw)  # type: ignore
 
-    async def delete(self, ids):
-        return await self.client.xdel(self.namespace, ids)
+    async def delete(self, *ids):
+        return await self.client.xdel(self.namespace, *ids)

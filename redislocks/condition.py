@@ -109,7 +109,7 @@ class Condition:
     async def wait(self):
         if not await self.locked():
             raise RuntimeError("cannot wait on un-acquired lock")
-
+        # 这里不用担心被其他进程干扰，锁已经由本进程锁定
         fut = asyncio.get_running_loop().create_future()
         await self.release()
         token: str = await self.current_time  # type: ignore
