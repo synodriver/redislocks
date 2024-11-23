@@ -41,9 +41,9 @@ class TestBarrier(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
-        self.assertEquals(await b2.n_waiting, 1)
-        self.assertEquals(state, 2)
+        self.assertEqual(await b1.n_waiting, 1)
+        self.assertEqual(await b2.n_waiting, 1)
+        self.assertEqual(state, 2)
 
         async def task2():
             nonlocal state
@@ -52,10 +52,10 @@ class TestBarrier(IsolatedAsyncioTestCase):
 
         t2 = asyncio.create_task(task2())
         await t2
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(await b2.n_waiting, 0)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(await b2.n_waiting, 0)
         await asyncio.sleep(0.5)
-        self.assertEquals(state, 0)
+        self.assertEqual(state, 0)
 
     async def test_cancel(self):
         await self.client1.delete("BARRIER:STATE")
@@ -68,14 +68,14 @@ class TestBarrier(IsolatedAsyncioTestCase):
             state -= 1
 
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 0)
+        self.assertEqual(await b1.n_waiting, 0)
         try:
             await asyncio.wait_for(task(), 1)
         except asyncio.TimeoutError:
             pass
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 1)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 1)
 
     async def test_broken(self):
         await self.client1.delete("BARRIER:STATE")
@@ -90,11 +90,11 @@ class TestBarrier(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
+        self.assertEqual(await b1.n_waiting, 1)
         await b1.abort()
         await t
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 0)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 0)
         self.assertTrue(await b1.broken)
 
     async def test_reset(self):
@@ -110,11 +110,11 @@ class TestBarrier(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
+        self.assertEqual(await b1.n_waiting, 1)
         await b1.reset()
         await t
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 0)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 0)
         self.assertFalse(await b1.broken)
 
     async def test_context(self):
@@ -130,11 +130,11 @@ class TestBarrier(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
+        self.assertEqual(await b1.n_waiting, 1)
         await b1.reset()
         await t
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 1)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 1)
         self.assertFalse(await b1.broken)
 
     async def test_aclose(self):
@@ -183,9 +183,9 @@ class TestBarrierResp3(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
-        self.assertEquals(await b2.n_waiting, 1)
-        self.assertEquals(state, 2)
+        self.assertEqual(await b1.n_waiting, 1)
+        self.assertEqual(await b2.n_waiting, 1)
+        self.assertEqual(state, 2)
 
         async def task2():
             nonlocal state
@@ -194,10 +194,10 @@ class TestBarrierResp3(IsolatedAsyncioTestCase):
 
         t2 = asyncio.create_task(task2())
         await t2
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(await b2.n_waiting, 0)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(await b2.n_waiting, 0)
         await asyncio.sleep(0.5)
-        self.assertEquals(state, 0)
+        self.assertEqual(state, 0)
 
     async def test_cancel(self):
         await self.client1.delete("BARRIER:STATE")
@@ -210,14 +210,14 @@ class TestBarrierResp3(IsolatedAsyncioTestCase):
             state -= 1
 
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 0)
+        self.assertEqual(await b1.n_waiting, 0)
         try:
             await asyncio.wait_for(task(), 1)
         except asyncio.TimeoutError:
             pass
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 1)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 1)
 
     async def test_broken(self):
         await self.client1.delete("BARRIER:STATE")
@@ -232,11 +232,11 @@ class TestBarrierResp3(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
+        self.assertEqual(await b1.n_waiting, 1)
         await b1.abort()
         await t
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 0)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 0)
         self.assertTrue(await b1.broken)
 
     async def test_reset(self):
@@ -252,11 +252,11 @@ class TestBarrierResp3(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
+        self.assertEqual(await b1.n_waiting, 1)
         await b1.reset()
         await t
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 0)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 0)
         self.assertFalse(await b1.broken)
 
     async def test_context(self):
@@ -272,11 +272,11 @@ class TestBarrierResp3(IsolatedAsyncioTestCase):
 
         t = asyncio.create_task(task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await b1.n_waiting, 1)
+        self.assertEqual(await b1.n_waiting, 1)
         await b1.reset()
         await t
-        self.assertEquals(await b1.n_waiting, 0)
-        self.assertEquals(state, 1)
+        self.assertEqual(await b1.n_waiting, 0)
+        self.assertEqual(state, 1)
         self.assertFalse(await b1.broken)
 
     async def test_aclose(self):

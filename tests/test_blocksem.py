@@ -88,8 +88,8 @@ class TestSem(IsolatedAsyncioTestCase):
         await self.sem1.acquire()
         await self.sem1.acquire()
         await self.sem1.release_all()
-        self.assertEquals(len(self.sem1._local_tokens), 0)
-        self.assertEquals(await self.sem1.available_count, 2)
+        self.assertEqual(len(self.sem1._local_tokens), 0)
+        self.assertEqual(await self.sem1.available_count, 2)
         await self.sem1.reset()
 
     async def test_target(self):
@@ -101,8 +101,8 @@ class TestSem(IsolatedAsyncioTestCase):
 
         await self.sem1.acquire(target=target1)
         self.assertTrue(result)
-        self.assertEquals(len(self.sem1._local_tokens), 0)
-        self.assertEquals(await self.sem1.available_count, 2)
+        self.assertEqual(len(self.sem1._local_tokens), 0)
+        self.assertEqual(await self.sem1.available_count, 2)
         result = False
 
         async def target2(token):
@@ -111,8 +111,8 @@ class TestSem(IsolatedAsyncioTestCase):
 
         await self.sem1.acquire(target=target2)
         self.assertTrue(result)
-        self.assertEquals(len(self.sem1._local_tokens), 0)
-        self.assertEquals(await self.sem1.available_count, 2)
+        self.assertEqual(len(self.sem1._local_tokens), 0)
+        self.assertEqual(await self.sem1.available_count, 2)
         await self.sem1.reset()
 
     async def test_release_stale_locks(self):
@@ -123,13 +123,13 @@ class TestSem(IsolatedAsyncioTestCase):
         )
         self.assertFalse(await sem.release())
         await sem.acquire()
-        self.assertEquals(sem.num_tokens, 1)
-        self.assertEquals(len(sem._local_tokens), 1)
-        self.assertEquals(await sem.available_count, 1)
+        self.assertEqual(sem.num_tokens, 1)
+        self.assertEqual(len(sem._local_tokens), 1)
+        self.assertEqual(await sem.available_count, 1)
         await asyncio.sleep(2)
         await sem.release_stale_locks()
-        self.assertEquals(len(sem._local_tokens), 0)
-        self.assertEquals(await sem.available_count, 2)
+        self.assertEqual(len(sem._local_tokens), 0)
+        self.assertEqual(await sem.available_count, 2)
         await sem.reset()
 
     async def test_aclose(self):
@@ -226,8 +226,8 @@ class TestSemResp3(IsolatedAsyncioTestCase):
         await self.sem1.acquire()
         await self.sem1.acquire()
         await self.sem1.release_all()
-        self.assertEquals(len(self.sem1._local_tokens), 0)
-        self.assertEquals(await self.sem1.available_count, 2)
+        self.assertEqual(len(self.sem1._local_tokens), 0)
+        self.assertEqual(await self.sem1.available_count, 2)
         await self.sem1.reset()
 
     async def test_target(self):
@@ -239,8 +239,8 @@ class TestSemResp3(IsolatedAsyncioTestCase):
 
         await self.sem1.acquire(target=target1)
         self.assertTrue(result)
-        self.assertEquals(len(self.sem1._local_tokens), 0)
-        self.assertEquals(await self.sem1.available_count, 2)
+        self.assertEqual(len(self.sem1._local_tokens), 0)
+        self.assertEqual(await self.sem1.available_count, 2)
         result = False
 
         async def target2(token):
@@ -249,8 +249,8 @@ class TestSemResp3(IsolatedAsyncioTestCase):
 
         await self.sem1.acquire(target=target2)
         self.assertTrue(result)
-        self.assertEquals(len(self.sem1._local_tokens), 0)
-        self.assertEquals(await self.sem1.available_count, 2)
+        self.assertEqual(len(self.sem1._local_tokens), 0)
+        self.assertEqual(await self.sem1.available_count, 2)
         await self.sem1.reset()
 
     async def test_release_stale_locks(self):
@@ -261,13 +261,13 @@ class TestSemResp3(IsolatedAsyncioTestCase):
         )
         self.assertFalse(await sem.release())
         await sem.acquire()
-        self.assertEquals(sem.num_tokens, 1)
-        self.assertEquals(len(sem._local_tokens), 1)
-        self.assertEquals(await sem.available_count, 1)
+        self.assertEqual(sem.num_tokens, 1)
+        self.assertEqual(len(sem._local_tokens), 1)
+        self.assertEqual(await sem.available_count, 1)
         await asyncio.sleep(2)
         await sem.release_stale_locks()
-        self.assertEquals(len(sem._local_tokens), 0)
-        self.assertEquals(await sem.available_count, 2)
+        self.assertEqual(len(sem._local_tokens), 0)
+        self.assertEqual(await sem.available_count, 2)
         await sem.reset()
 
     async def test_aclose(self):

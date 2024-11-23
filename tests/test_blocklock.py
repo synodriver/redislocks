@@ -31,7 +31,7 @@ class TestLock(IsolatedAsyncioTestCase):
         self.assertFalse(await self.lock1.has_token("w"))
         self.assertTrue(await self.lock2.locked("w"))
         self.assertFalse(await self.lock2.locked("r"))
-        self.assertNotEquals(await self.lock1.acquire("r"), None)
+        self.assertNotEqual(await self.lock1.acquire("r"), None)
         self.assertTrue(await self.lock1.has_token("r"))
         await self.lock1.release("r")
         await self.lock1.release("r")
@@ -147,20 +147,20 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.delkeys()
 
     async def test_state(self):
-        self.assertEquals(await self.lock2.get_state(), 0)
+        self.assertEqual(await self.lock2.get_state(), 0)
         await self.lock1.acquire("w")
-        self.assertEquals(await self.lock2.get_state(), 2)
+        self.assertEqual(await self.lock2.get_state(), 2)
         await self.lock1.release("w")
-        self.assertEquals(await self.lock2.get_state(), 0)
+        self.assertEqual(await self.lock2.get_state(), 0)
         await self.lock1.acquire("r")
-        self.assertEquals(await self.lock2.get_state(), 1)
+        self.assertEqual(await self.lock2.get_state(), 1)
 
         async def acquire_task():
             await self.lock1.acquire("w")
 
         asyncio.create_task(acquire_task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await self.lock2.get_state(), 3)
+        self.assertEqual(await self.lock2.get_state(), 3)
         await self.delkeys()
 
     async def test_wrong_acquire_release(self):
@@ -179,7 +179,7 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.lock1.reset()
         self.assertFalse(await self.lock1.locked("r"))
         self.assertFalse(await self.lock1.locked("w"))
-        self.assertEquals(len(self.lock1._local_readtokens), 0)
+        self.assertEqual(len(self.lock1._local_readtokens), 0)
         await self.delkeys()
 
     async def test_release_all(self):
@@ -188,7 +188,7 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.lock1.release_all()
         self.assertFalse(await self.lock1.locked("r"))
         self.assertFalse(await self.lock1.locked("w"))
-        self.assertEquals(len(self.lock1._local_readtokens), 0)
+        self.assertEqual(len(self.lock1._local_readtokens), 0)
         await self.delkeys()
 
     async def test_release_all2(self):
@@ -196,8 +196,8 @@ class TestLock(IsolatedAsyncioTestCase):
         await self.lock1.release_all()
         self.assertFalse(await self.lock1.locked("r"))
         self.assertFalse(await self.lock1.locked("w"))
-        self.assertEquals(len(self.lock1._local_readtokens), 0)
-        self.assertEquals(self.lock1._local_writetoken, None)
+        self.assertEqual(len(self.lock1._local_readtokens), 0)
+        self.assertEqual(self.lock1._local_writetoken, None)
         await self.delkeys()
 
     async def test_aclose(self):
@@ -239,7 +239,7 @@ class TestLockResp3(IsolatedAsyncioTestCase):
         self.assertFalse(await self.lock1.has_token("w"))
         self.assertTrue(await self.lock2.locked("w"))
         self.assertFalse(await self.lock2.locked("r"))
-        self.assertNotEquals(await self.lock1.acquire("r"), None)
+        self.assertNotEqual(await self.lock1.acquire("r"), None)
         self.assertTrue(await self.lock1.has_token("r"))
         await self.lock1.release("r")
         await self.lock1.release("r")
@@ -355,20 +355,20 @@ class TestLockResp3(IsolatedAsyncioTestCase):
         await self.delkeys()
 
     async def test_state(self):
-        self.assertEquals(await self.lock2.get_state(), 0)
+        self.assertEqual(await self.lock2.get_state(), 0)
         await self.lock1.acquire("w")
-        self.assertEquals(await self.lock2.get_state(), 2)
+        self.assertEqual(await self.lock2.get_state(), 2)
         await self.lock1.release("w")
-        self.assertEquals(await self.lock2.get_state(), 0)
+        self.assertEqual(await self.lock2.get_state(), 0)
         await self.lock1.acquire("r")
-        self.assertEquals(await self.lock2.get_state(), 1)
+        self.assertEqual(await self.lock2.get_state(), 1)
 
         async def acquire_task():
             await self.lock1.acquire("w")
 
         asyncio.create_task(acquire_task())
         await asyncio.sleep(0.5)
-        self.assertEquals(await self.lock2.get_state(), 3)
+        self.assertEqual(await self.lock2.get_state(), 3)
         await self.delkeys()
 
     async def test_wrong_acquire_release(self):
@@ -387,7 +387,7 @@ class TestLockResp3(IsolatedAsyncioTestCase):
         await self.lock1.reset()
         self.assertFalse(await self.lock1.locked("r"))
         self.assertFalse(await self.lock1.locked("w"))
-        self.assertEquals(len(self.lock1._local_readtokens), 0)
+        self.assertEqual(len(self.lock1._local_readtokens), 0)
         await self.delkeys()
 
     async def test_release_all(self):
@@ -396,7 +396,7 @@ class TestLockResp3(IsolatedAsyncioTestCase):
         await self.lock1.release_all()
         self.assertFalse(await self.lock1.locked("r"))
         self.assertFalse(await self.lock1.locked("w"))
-        self.assertEquals(len(self.lock1._local_readtokens), 0)
+        self.assertEqual(len(self.lock1._local_readtokens), 0)
         await self.delkeys()
 
     async def test_release_all2(self):
@@ -404,8 +404,8 @@ class TestLockResp3(IsolatedAsyncioTestCase):
         await self.lock1.release_all()
         self.assertFalse(await self.lock1.locked("r"))
         self.assertFalse(await self.lock1.locked("w"))
-        self.assertEquals(len(self.lock1._local_readtokens), 0)
-        self.assertEquals(self.lock1._local_writetoken, None)
+        self.assertEqual(len(self.lock1._local_readtokens), 0)
+        self.assertEqual(self.lock1._local_writetoken, None)
         await self.delkeys()
 
     async def test_aclose(self):

@@ -78,8 +78,8 @@ class TestEvent(IsolatedAsyncioTestCase):
         await asyncio.sleep(0.5)
         self.assertEqual(ret, 1)
         self.assertFalse(await self.event1.is_set())
-        self.assertEquals(await self.client1.llen("EVENT:WAITER"), 0)
-        self.assertEquals(await self.client1.llen("EVENT:WAITERPOP"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITER"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITERPOP"), 0)
 
     async def test_cancel2(self):
         await self.event1.reset()
@@ -99,8 +99,8 @@ class TestEvent(IsolatedAsyncioTestCase):
         await asyncio.sleep(0.5)
         self.assertEqual(ret, 1)
         self.assertFalse(await self.event1.is_set())
-        self.assertEquals(await self.client1.llen("EVENT:WAITER"), 0)
-        self.assertEquals(await self.client1.llen("EVENT:WAITERPOP"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITER"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITERPOP"), 0)
 
     async def test_direct_return(self):
         await self.event1.reset()
@@ -205,8 +205,8 @@ class TestEventResp3(IsolatedAsyncioTestCase):
         await asyncio.sleep(0.5)
         self.assertEqual(ret, 1)
         self.assertFalse(await self.event1.is_set())
-        self.assertEquals(await self.client1.llen("EVENT:WAITER"), 0)
-        self.assertEquals(await self.client1.llen("EVENT:WAITERPOP"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITER"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITERPOP"), 0)
 
     async def test_cancel2(self):
         await self.event1.reset()
@@ -226,8 +226,8 @@ class TestEventResp3(IsolatedAsyncioTestCase):
         await asyncio.sleep(0.5)
         self.assertEqual(ret, 1)
         self.assertFalse(await self.event1.is_set())
-        self.assertEquals(await self.client1.llen("EVENT:WAITER"), 0)
-        self.assertEquals(await self.client1.llen("EVENT:WAITERPOP"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITER"), 0)
+        self.assertEqual(await self.client1.llen("EVENT:WAITERPOP"), 0)
 
     async def test_direct_return(self):
         await self.event1.reset()

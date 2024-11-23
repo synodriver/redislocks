@@ -36,7 +36,7 @@ def main():
         url="https://github.com/synodriver/redislocks",
         packages=packages,
         keywords=["asyncio", "redis", "rwlock"],
-        description="Distributed redis locks",
+        description="Distributed redis locks and queue",
         long_description_content_type="text/markdown",
         long_description=dis,
         author="synodriver",
