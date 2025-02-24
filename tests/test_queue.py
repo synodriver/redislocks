@@ -10,7 +10,7 @@ from unittest import IsolatedAsyncioTestCase
 from dotenv import load_dotenv
 from redis.asyncio import Redis
 
-from redislocks.queue import BroadcastQueue, Queue, Stream
+from redislocks.queue import BroadcastQueue, GroupStream, Queue, Stream
 from redislocks.utils import ensure_str
 
 load_dotenv("./.env")
@@ -191,6 +191,38 @@ class TestQueue(IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(s2.get(), 1)
 
+    async def test_group_stream(self):
+        await self.client1.delete("STREAM", "STREAM:CONSUMER_EXISTS")
+        s1 = GroupStream(self.client1, consumer="consumer1")
+        s2 = GroupStream(self.client2, consumer="consumer2")
+        await s1.put({"k": "value1"})
+        await s1.put({"k": "value2"})
+        data = await s2.get()
+        self.assertEqual(
+            ensure_str(data.get("k", None) or data.get(b"k", None)), "value1"
+        )
+        pending = await s2.check_pending()
+        self.assertEqual(
+            ensure_str(pending.get("k", None) or pending.get(b"k", None)), "value1"
+        )
+
+        data = await s1.get()
+        self.assertEqual(
+            ensure_str(data.get("k", None) or data.get(b"k", None)), "value2"
+        )
+        pending = await s1.check_pending()
+        self.assertEqual(
+            ensure_str(pending.get("k", None) or pending.get(b"k", None)), "value2"
+        )
+
+        await s2.ack(s2.last_id)
+        pending = await s2.check_pending()
+        self.assertIsNone(pending)
+
+        await s1.ack(s1.last_id)
+        pending = await s1.check_pending()
+        self.assertIsNone(pending)
+
 
 class TestQueueResp3(IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -370,6 +402,38 @@ class TestQueueResp3(IsolatedAsyncioTestCase):
         self.assertTrue(await s2.empty())
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(s2.get(), 1)
+
+    async def test_group_stream(self):
+        await self.client1.delete("STREAM", "STREAM:CONSUMER_EXISTS")
+        s1 = GroupStream(self.client1, consumer="consumer1")
+        s2 = GroupStream(self.client2, consumer="consumer2")
+        await s1.put({"k": "value1"})
+        await s1.put({"k": "value2"})
+        data = await s2.get()
+        self.assertEqual(
+            ensure_str(data.get("k", None) or data.get(b"k", None)), "value1"
+        )
+        pending = await s2.check_pending()
+        self.assertEqual(
+            ensure_str(pending.get("k", None) or pending.get(b"k", None)), "value1"
+        )
+
+        data = await s1.get()
+        self.assertEqual(
+            ensure_str(data.get("k", None) or data.get(b"k", None)), "value2"
+        )
+        pending = await s1.check_pending()
+        self.assertEqual(
+            ensure_str(pending.get("k", None) or pending.get(b"k", None)), "value2"
+        )
+
+        await s2.ack(s2.last_id)
+        pending = await s2.check_pending()
+        self.assertIsNone(pending)
+
+        await s1.ack(s1.last_id)
+        pending = await s1.check_pending()
+        self.assertIsNone(pending)
 
 
 if __name__ == "__main__":

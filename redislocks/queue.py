@@ -115,7 +115,7 @@ class Stream:
             self.namespace, value, maxlen=self.maxlen, approximate=False
         )
 
-    async def __run_callback(self):
+    async def _run_callback(self):
         if self.on_cursor_change is not None:
             ret = self.on_cursor_change(self.last_id)
             if asyncio.iscoroutine(ret):
@@ -125,11 +125,11 @@ class Stream:
         data = await self.client.xread({self.namespace: id_ or self.last_id}, 1, 0)
         if isinstance(data, list):
             self.last_id = ensure_str(data[0][1][0][0])
-            await self.__run_callback()  # 保存last_id的机会，防止重复消费
+            await self._run_callback()  # 保存last_id的机会，防止重复消费
             return data[0][1][0][1]
         else:  # resp 3 dict
             self.last_id = ensure_str(list(data.values())[0][0][0][0])
-            await self.__run_callback()
+            await self._run_callback()
             return list(data.values())[0][0][0][1]
 
     async def qsize(self):
@@ -156,3 +156,88 @@ class Stream:
 
     async def delete(self, *ids):
         return await self.client.xdel(self.namespace, *ids)
+
+
+class GroupStream(Stream):
+    def __init__(
+        self,
+        client: Optional[Redis] = None,
+        namespace: str = "STREAM",
+        group: str = "GROUP",
+        consumer: str = "CONSUMER",
+        maxlen: int = 100,
+        last_id: Optional[str] = None,
+        on_cursor_change: Optional[
+            Callable[[str], Union[None, Awaitable[None]]]
+        ] = None,
+    ):
+        super().__init__(client, namespace, maxlen, last_id, on_cursor_change)
+        self.group = group
+        self.consumer = consumer
+        self.consumer_exists_key = self.get_namespaced_key("CONSUMER_EXISTS")
+
+    def get_namespaced_key(self, suffix):
+        return "{0}:{1}".format(self.namespace, suffix)
+
+    async def _check_group(self):
+        # if not await self.client.exists(self.consumer_exists_key):
+        async with self.client.pipeline() as pipe:
+            await pipe.watch(self.consumer_exists_key)
+            if await pipe.exists(self.consumer_exists_key):
+                await pipe.reset()
+                return None
+            pipe.multi()
+            pipe.xgroup_create(
+                self.namespace, self.group, id=self.last_id, mkstream=True
+            )
+            pipe.set(self.consumer_exists_key, "1")
+            await pipe.execute()
+
+    async def put(self, value: dict):
+        await self._check_group()
+        return await super().put(value)
+
+    async def check_pending(self, id_=None):
+        await self._check_group()
+        data = await self.client.xreadgroup(
+            self.group, self.consumer, {self.namespace: id_ or "0-0"}, 1, 0
+        )
+        try:
+            if isinstance(data, list):
+                self.last_id = ensure_str(data[0][1][0][0])
+                await self._run_callback()  # 保存last_id的机会，防止重复消费
+                return data[0][1][0][1]
+            else:  # resp 3 dict
+                self.last_id = ensure_str(list(data.values())[0][0][0][0])
+                await self._run_callback()
+                return list(data.values())[0][0][0][1]
+        except IndexError:
+            return None
+
+    async def get(self):
+        await self._check_group()
+        data = await self.client.xreadgroup(
+            self.group, self.consumer, {self.namespace: ">"}, 1, 0
+        )
+        if isinstance(data, list):
+            self.last_id = ensure_str(data[0][1][0][0])
+            await self._run_callback()  # 保存last_id的机会，防止重复消费
+            return data[0][1][0][1]
+        else:  # resp 3 dict
+            self.last_id = ensure_str(list(data.values())[0][0][0][0])
+            await self._run_callback()
+            return list(data.values())[0][0][0][1]
+
+    async def ack(self, *ids):
+        """
+        调用get后处理完成后，需要调用ack
+        :param ids:
+        :return:
+        """
+        await self._check_group()
+        return await self.client.xack(self.namespace, self.group, *ids)
+
+    async def aclose(self):
+        await self.client.xgroup_destroy(self.namespace, self.group)
+        await self.client.delete(self.consumer_exists_key, self.namespace)
+        await self.client.aclose()
