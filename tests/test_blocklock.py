@@ -10,7 +10,9 @@ from redis.asyncio import Redis
 
 from redislocks import RWLock
 
-load_dotenv("./.env")
+from pathlib import Path
+
+load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 
 
 class TestLock(IsolatedAsyncioTestCase):

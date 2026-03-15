@@ -8,7 +8,9 @@ from redis.asyncio import Redis
 
 from redislocks.event import Event
 
-load_dotenv("./.env")
+from pathlib import Path
+
+load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 
 
 class TestEvent(IsolatedAsyncioTestCase):

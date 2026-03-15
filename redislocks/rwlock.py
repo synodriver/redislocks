@@ -2,10 +2,13 @@
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
 import asyncio
+import logging
+import uuid
 from enum import IntEnum
 from typing import Dict, List, Literal, Optional
 
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
 from redislocks.exceptions import NotAvailable
 from redislocks.utils import ensure_str
@@ -31,27 +34,38 @@ class RWLock:
     """
 
     exists_val = "ok"
+    _logger = logging.getLogger("redislocks.rwlock")
 
     def __init__(
         self,
         client: Optional[Redis] = None,
         namespace: str = "RWLOCK",
         blocking: bool = True,
+        reconnect_base_delay: float = 0.5,
+        reconnect_max_delay: float = 30.0,
+        reconnect_max_retries: Optional[int] = None,
     ):
         """
 
         :param client: redis client
         :param namespace: lock的命名空间，相同的视为同一把锁，使用相同的redis key
         :param blocking: 阻塞与否 非阻塞模式下，如果不能立刻获取锁则会抛出NotAvailable
+        :param reconnect_base_delay: pubsub重连的基础延迟(秒)，每次翻倍直到max_delay
+        :param reconnect_max_delay: pubsub重连的最大延迟(秒)
+        :param reconnect_max_retries: pubsub最大重连次数，None为无限重试
         """
         self.client = client or Redis()
         self.namespace = namespace
         self.blocking = blocking
+        self._reconnect_base_delay = reconnect_base_delay
+        self._reconnect_max_delay = reconnect_max_delay
+        self._reconnect_max_retries = reconnect_max_retries
 
         self.check_exists_key = self.get_namespaced_key("EXISTS")  # RWLOCK:EXISTS
         self.read_key = self.get_namespaced_key("READ")
         self.write_key = self.get_namespaced_key("WRITE")
         self.write_waiter_key = self.get_namespaced_key("WRITEWAITER")
+        self.notify_channel = self.get_namespaced_key("NOTIFY")  # 写锁帮轮通知channel
 
         self._read_waiters = []  # type: List[asyncio.Future]
         self._write_waiters = {}  # type: Dict[str, asyncio.Future]
@@ -61,8 +75,9 @@ class RWLock:
 -- 加读锁
 -- numkey: 1
 -- namespace
+-- ARGV[1]: 由调用方生成的唯一token
 local namespace = KEYS[1]
---local blocking = ARGV[1] -- string
+local token = ARGV[1]
 local read_key = namespace .. ":READ"
 local write_key = namespace .. ":WRITE"
 local write_waiter_key = namespace .. ":WRITEWAITER"
@@ -84,14 +99,16 @@ end
 
 local current_state = get_state()
 
+if current_state == nil then
+    return redis.error_reply("unknown state")
+end
+
 if current_state == 2 or current_state == 3 then
     -- 写入状态 or 写锁正在等待等待
     return 0 -- 直接加锁失败，此时，如果是阻塞模式，开始监听keyspace
 else
-    local time = redis.call("TIME")
-    local timestring = time[1] ..".".. time[2] -- string
-    redis.call("SADD", read_key, timestring)
-    return timestring -- 成功就返回时间戳
+    redis.call("SADD", read_key, token)
+    return token -- 成功就返回token
 end
             """
         )  # lockread.lua
@@ -100,8 +117,10 @@ end
 -- 释放读锁
 -- numkey: 2
 -- namespace token
+-- ARGV[1]: notify_channel 用于PUBLISH帮轮上位的写锁token
 local namespace = KEYS[1]
 local token = KEYS[2] -- read token
+local notify_channel = ARGV[1]
 local read_key = namespace .. ":READ"
 local write_key = namespace .. ":WRITE"
 local write_waiter_key = namespace .. ":WRITEWAITER"
@@ -124,11 +143,16 @@ end
 
 local current_state = get_state()
 
+if current_state == nil then
+    return redis.error_reply("unknown state")
+end
+
 local ret = redis.call("SREM", read_key, token)
 if redis.call("SCARD", read_key) == 0 and current_state == 3 then
     --读锁空了，有人在等写锁，且写锁现在还不存在， 那去掉读锁的过程就帮他们轮一下写锁
     local write_token = redis.call("LPOP", write_waiter_key)
     redis.call("SET", write_key, write_token)
+    redis.call("PUBLISH", notify_channel, write_token)
 end
 
 return ret
@@ -139,7 +163,9 @@ return ret
 -- 加写锁 直接设置不检查
 -- numkey: 1
 -- namespace
+-- ARGV[1]: 由调用方生成的唯一token
 local namespace = KEYS[1]
+local token = ARGV[1]
 local read_key = namespace .. ":READ"
 local write_key = namespace .. ":WRITE"
 local write_waiter_key = namespace .. ":WRITEWAITER"
@@ -161,12 +187,14 @@ end
 
 local current_state = get_state()
 
+if current_state == nil then
+    return redis.error_reply("unknown state")
+end
+
 if current_state == 0 then
     -- 不存在写锁 也不存在 读锁 可以直接设置写锁
-    local time = redis.call("TIME")
-    local timestring = time[1] ..".".. time[2] -- string
-    redis.call("SET", write_key, timestring)
-    return timestring -- 获取写锁成功，返回时间戳
+    redis.call("SET", write_key, token)
+    return token -- 获取写锁成功，返回token
 else
     return 0
 end
@@ -175,10 +203,12 @@ end
         self._unlockwrite_script = self.client.register_script(
             """
 -- 老写锁释放的时候带新写锁进来，或者读锁没有的时候带新写锁尽量
--- numkey: 1
--- namespace
+-- numkey: 2
+-- namespace, old_token
+-- ARGV[1]: notify_channel 用于PUBLISH帮轮上位的写锁token
 local namespace = KEYS[1]
 local old_token = KEYS[2]
+local notify_channel = ARGV[1]
 local read_key = namespace .. ":READ"
 local write_key = namespace .. ":WRITE"
 local write_waiter_key = namespace .. ":WRITEWAITER"
@@ -201,6 +231,10 @@ end
 
 local current_state = get_state()
 
+if current_state == nil then
+    return redis.error_reply("unknown state")
+end
+
 if current_state == 2 then
     if redis.call("GET", write_key) ~= old_token then -- 这不是我的token, 谁动了我的写锁
         return 0
@@ -208,6 +242,7 @@ if current_state == 2 then
     if write_waiter_exists then -- 还有人在等写锁，帮他轮
         local write_token = redis.call("LPOP", write_waiter_key)
         redis.call("SET", write_key, write_token)
+        redis.call("PUBLISH", notify_channel, write_token)
     else --  后面没有人在等写锁了，那就删除写锁
         redis.call("DEL", write_key)
     end
@@ -222,8 +257,10 @@ end
 -- 取消加写锁
 -- numkey: 2
 -- namespace， token
+-- ARGV[1]: notify_channel 用于PUBLISH帮轮上位的写锁token
 local namespace = KEYS[1]
 local token = KEYS[2]
+local notify_channel = ARGV[1]
 
 local write_key = namespace .. ":WRITE"
 local write_waiter_key = namespace .. ":WRITEWAITER"
@@ -235,6 +272,7 @@ if redis.call("LREM", write_waiter_key, 1, token) == 0 then
         if write_waiter_exists then -- 还有人在等写锁，帮他轮
             local write_token = redis.call("LPOP", write_waiter_key)
             redis.call("SET", write_key, write_token)
+            redis.call("PUBLISH", notify_channel, write_token)
         else --  后面没有人在等写锁了，那就删除写锁
             redis.call("DEL", write_key)
         end
@@ -324,7 +362,10 @@ end
     async def acquire(self, mode: Literal["r", "w"] = "r") -> str:
         await self._exists_or_init()
         if mode == "r":
-            if token := await self._lockread_script([self.namespace]):
+            token_candidate = uuid.uuid4().hex
+            if token := await self._lockread_script(
+                [self.namespace], [token_candidate]
+            ):
                 token = ensure_str(token)
                 self._local_readtokens.append(token)
                 return token
@@ -341,17 +382,18 @@ end
             else:
                 raise NotAvailable
         elif mode == "w":
+            token_candidate = uuid.uuid4().hex
             if token := await self._lockwrite_script(
-                [self.namespace]
+                [self.namespace], [token_candidate]
             ):  # 可以立刻非阻塞获取写锁 str, bytes
                 self._local_writetoken = ensure_str(token)  # 时间戳
                 return token  # type: ignore
             if self.blocking:  # 不能立刻获取到写锁，阻塞模式(默认)，开始等self._write_waiters，
-                token: str = await self.current_time  # type: ignore
+                token: str = uuid.uuid4().hex  # type: ignore
                 # 这下只能等了
-                await self.client.rpush(self.write_waiter_key, token)  # type: ignore
                 waiter = asyncio.get_running_loop().create_future()
-                self._write_waiters[token] = waiter
+                self._write_waiters[token] = waiter # todo try?
+                await self.client.rpush(self.write_waiter_key, token)  # type: ignore
                 try:
                     await waiter  # 一旦取消，则redis中writewaiter里面还是有token，但是本地的write_waiter已经del了 ，因此需要删除等待写锁队列里面的token
                 except asyncio.CancelledError:
@@ -362,7 +404,7 @@ end
                     err = None
                     while True:
                         try:
-                            await self._cancellockwrite_script([self.namespace, token])
+                            await self._cancellockwrite_script([self.namespace, token], [self.notify_channel])
                             break
                         except asyncio.CancelledError as e:
                             err = e
@@ -392,7 +434,7 @@ end
                 raise ValueError("can not release more than acquire")
             try:
                 if not await self._unlockread_script(
-                    [self.namespace, token]
+                    [self.namespace, token], [self.notify_channel]
                 ):  # 什么都没srem出来，本地token有问题还是云端释放了？
                     raise ValueError(
                         "No lock is released. Is it released by a timeout checker?"
@@ -404,7 +446,7 @@ end
             if self._local_writetoken is None:
                 raise ValueError("can not release write lock without acquire it")
             if not await self._unlockwrite_script(
-                [self.namespace, self._local_writetoken]
+                [self.namespace, self._local_writetoken], [self.notify_channel]
             ):  # 如果加入超时机制的话 这里需要检查远程的write_key与self._local_writetoken是否对的上
                 # 如果对不上就是那个已经被超时检查器给释放了 读token扼要检查 没在set里面也是被超时检查器给释放了
                 raise ValueError(
@@ -469,31 +511,87 @@ end
     async def _listen_events(self):
         """
         监听redis中的key变动 从而知道什么时候可以获取锁
+        内置重连机制，断线后自动以指数退避策略重连
+
+        订阅两个channel:
+        1. keyspace channel: 监听write_key的del事件，用于唤醒读锁等待者
+        2. notify_channel: 接收Lua脚本PUBLISH的帮轮上位token，用于唤醒写锁等待者
+           (相比旧方案先收set事件再GET write_key，消除了竞态窗口)
         :return:
         """
-        async with self.client.pubsub() as pubsub:
-            await pubsub.subscribe(
-                f"__keyspace@{self._get_db()}__:{self.write_key}",
-            )
-            async for event in pubsub.listen():
-                # print(event)
+        retries = 0
+        delay = self._reconnect_base_delay
+        keyspace_channel = f"__keyspace@{self._get_db()}__:{self.write_key}"
+        while True:
+            pubsub = None
+            try:
+                pubsub = self.client.pubsub()
+                await pubsub.subscribe(keyspace_channel, self.notify_channel)
+                # 连接成功，重置重试计数和延迟
+                retries = 0
+                delay = self._reconnect_base_delay
+                self._logger.debug(
+                    "pubsub subscribed to %s and %s",
+                    keyspace_channel,
+                    self.notify_channel,
+                )
+                async for event in pubsub.listen():
+                    if ensure_str(event["type"]) != "message":
+                        continue
+                    ch = ensure_str(event["channel"])
+                    data = ensure_str(event["data"])
+
+                    if ch == keyspace_channel and data == "del":
+                        # 写锁被删除了，现在可以读了，唤醒所有读锁等待者
+                        for waiter in self._read_waiters:
+                            if not waiter.done():
+                                waiter.set_result(None)
+
+                    elif ch == self.notify_channel:
+                        # 收到帮轮上位的写锁token，直接从消息内容获取，无需GET
+                        token = data
+                        if token in self._write_waiters:
+                            waiter = self._write_waiters[token]
+                            if not waiter.done():
+                                waiter.set_result(None)
+            except asyncio.CancelledError:
+                # task被取消，正常退出，不重连
+                raise
+            except (ConnectionError, TimeoutError, RedisError, OSError) as e:
+                retries += 1
                 if (
-                    ensure_str(event["type"]) == "message"
-                    and ensure_str(event["channel"])
-                    == f"__keyspace@{self._get_db()}__:{self.write_key}"
-                    and ensure_str(event["data"]) == "del"
-                ):  # 写锁被删除了，现在可以读了
-                    for waiter in self._read_waiters:
-                        waiter.set_result(None)
+                    self._reconnect_max_retries is not None
+                    and retries > self._reconnect_max_retries
+                ):
+                    self._logger.error(
+                        "pubsub reconnect failed after %d retries, giving up: %s",
+                        retries - 1,
+                        e,
+                    )
+                    return
+                self._logger.warning(
+                    "pubsub connection lost (attempt %d), reconnecting in %.1fs: %s",
+                    retries,
+                    delay,
+                    e,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._reconnect_max_delay)
+            except Exception as e:
+                self._logger.exception(
+                    "unexpected error in _listen_events, reconnecting: %s", e
+                )
+                retries += 1
                 if (
-                    ensure_str(event["type"]) == "message"
-                    and ensure_str(event["channel"])
-                    == f"__keyspace@{self._get_db()}__:{self.write_key}"
-                    and ensure_str(event["data"]) == "set"
-                ):  # 被释放的老 读锁/写锁 唤醒了新写锁，对应token的写锁不用等了，如果那个token属于这个client有的话
-                    token = ensure_str(
-                        await self.client.get(self.write_key)
-                    )  # 轮到哪个幸运儿上了
-                    if token in self._write_waiters:
-                        waiter = self._write_waiters[token]
-                        waiter.set_result(None)
+                    self._reconnect_max_retries is not None
+                    and retries > self._reconnect_max_retries
+                ):
+                    return
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._reconnect_max_delay)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass

@@ -13,7 +13,9 @@ from redis.asyncio import Redis
 from redislocks.queue import BroadcastQueue, GroupStream, Queue, Stream
 from redislocks.utils import ensure_str
 
-load_dotenv("./.env")
+from pathlib import Path
+
+load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 
 
 class TestQueue(IsolatedAsyncioTestCase):
