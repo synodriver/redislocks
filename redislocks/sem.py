@@ -37,7 +37,7 @@ class Semaphore:
         """
         self.client = client or Redis()
         if value < 1:
-            raise ValueError("Semaphore initial value must be >= 0")
+            raise ValueError("Semaphore initial value must be >= 1")
         self.value = value
         self.namespace = namespace
         self.stale_client_timeout = stale_client_timeout
@@ -133,7 +133,7 @@ class Semaphore:
                 await self.client.hgetall(self.grabbed_key)
             ).items():
                 timed_out_at = float(locked_at) + self.stale_client_timeout
-                if timed_out_at < float(await self.current_time):
+                if token in self._local_tokens and timed_out_at < float(await self.current_time):
                     await self.signal(token)
                     self._local_tokens.remove(token)
         finally:
@@ -159,9 +159,12 @@ class Semaphore:
         return True if grabbed == self.value else False
 
     async def release(self):
-        if not await self.has_token():
-            return False
-        return await self.signal(self._local_tokens.pop())
+        for i in range(len(self._local_tokens) - 1, -1, -1):
+            token = self._local_tokens[i]
+            if await self._is_locked(token):
+                self._local_tokens.pop(i)
+                return await self.signal(token)
+        return False
 
     async def reset(self):
         await self._init()
@@ -195,7 +198,7 @@ class Semaphore:
 
     @property
     def check_release_locks_key(self):
-        return self._get_and_set_key("_release_locks_ley", "RELEASE_LOCKS")
+        return self._get_and_set_key("_release_locks_key", "RELEASE_LOCKS")
 
     def _get_and_set_key(self, key_name, namespace_suffix):
         if not hasattr(self, key_name):

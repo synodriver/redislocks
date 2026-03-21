@@ -134,6 +134,33 @@ class TestSem(IsolatedAsyncioTestCase):
         self.assertEqual(await sem.available_count, 2)
         await sem.reset()
 
+    async def test_release_stale_locks2(self):
+        sem = Semaphore(
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            stale_client_timeout=1,
+        )
+        sem2 = Semaphore(
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            stale_client_timeout=1,
+        )
+        self.assertFalse(await sem.release())
+        await sem.acquire()
+        self.assertEqual(sem.num_tokens, 1)
+        self.assertEqual(len(sem._local_tokens), 1)
+        self.assertEqual(await sem.available_count, 1)
+        await sem2.acquire()
+        self.assertEqual(await sem2.available_count, 0)
+        await asyncio.sleep(2)
+        await sem.release_stale_locks()
+        self.assertEqual(len(sem._local_tokens), 0)
+        await sem2.release_stale_locks()
+        self.assertEqual(len(sem2._local_tokens), 0)
+        self.assertEqual(await sem.available_count, 2)
+        self.assertEqual(await sem2.available_count, 2)
+        await sem.reset()
+
     async def test_aclose(self):
         c = Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD"))
         lock1 = Semaphore(2, c, namespace="ACLOSESEM")
@@ -269,6 +296,32 @@ class TestSemResp3(IsolatedAsyncioTestCase):
         await asyncio.sleep(2)
         await sem.release_stale_locks()
         self.assertEqual(len(sem._local_tokens), 0)
+        self.assertEqual(await sem.available_count, 2)
+        await sem.reset()
+
+    async def test_release_stale_locks2(self):
+        sem = Semaphore(
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            stale_client_timeout=1,
+        )
+        sem2 = Semaphore(
+            2,
+            Redis(host=os.getenv("REDIS"), password=os.getenv("PASSWORD")),
+            stale_client_timeout=1,
+        )
+        self.assertFalse(await sem.release())
+        await sem.acquire()
+        self.assertEqual(sem.num_tokens, 1)
+        self.assertEqual(len(sem._local_tokens), 1)
+        self.assertEqual(await sem.available_count, 1)
+        await sem2.acquire()
+        self.assertEqual(await sem2.available_count, 0)
+        await asyncio.sleep(2)
+        await sem.release_stale_locks()
+        self.assertEqual(len(sem._local_tokens), 0)
+        await sem2.release_stale_locks()
+        self.assertEqual(len(sem2._local_tokens), 0)
         self.assertEqual(await sem.available_count, 2)
         await sem.reset()
 
