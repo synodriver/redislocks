@@ -131,11 +131,14 @@ class Semaphore:
         try:
             for token, locked_at in (
                 await self.client.hgetall(self.grabbed_key)
-            ).items():
+            ).items():  # 这里还需要帮其他客户端释放，因为其他client可能不在了
                 timed_out_at = float(locked_at) + self.stale_client_timeout
-                if token in self._local_tokens and timed_out_at < float(await self.current_time):
+                if timed_out_at < float(await self.current_time):
                     await self.signal(token)
-                    self._local_tokens.remove(token)
+                    try:
+                        self._local_tokens.remove(token)
+                    except ValueError:
+                        pass
         finally:
             await self.client.delete(self.check_release_locks_key)
 
