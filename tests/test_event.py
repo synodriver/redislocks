@@ -261,3 +261,7 @@ class TestEventResp3(IsolatedAsyncioTestCase):
         t = asyncio.create_task(task1())
         await asyncio.sleep(0.5)
         self.assertEqual(ret, 1)
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

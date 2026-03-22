@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 import asyncio
 from typing import Optional
+import uuid
 
 from redis.asyncio import Redis
 
 
 class Event:
     """Asynchronous Distribute equivalent to asyncio.Event, based on redis.
-
-    Class implementing event objects. An event manages a flag that can be set
-    to true with the set() method and reset to false with the clear() method.
-    The wait() method blocks until the flag is true. The flag is initially
-    false.
 
     NAMESPACE:SET
     NAMESPACE:WAITER
@@ -33,15 +29,14 @@ class Event:
         self._wait_script = self.client.register_script(
             """
         local namespace = KEYS[1]
+        local token = ARGV[1]
         local set_key = namespace .. ":SET"
         local waiter_key = namespace .. ":WAITER"
         
         if redis.call("EXISTS", set_key)==1 then
             return 1
         end
-        local time = redis.call("TIME")
-        local timestring = time[1] ..".".. time[2]
-        redis.call("RPUSH", waiter_key, timestring)
+        redis.call("RPUSH", waiter_key, token)
         return 0
         """
         )
@@ -66,11 +61,12 @@ class Event:
         self._cancelwait_script = self.client.register_script(
             """
             local namespace = KEYS[1]
+            local token = ARGV[1]
             local waiter_key = namespace .. ":WAITER"
             local waiter_pop_key = namespace .. ":WAITERPOP"
 
-            if not redis.call("LPOP", waiter_key) then
-                redis.call("LPOP", waiter_pop_key)
+            if redis.call("LREM", waiter_key, 1, token) == 0 then
+                redis.call("LREM", waiter_pop_key, 1, token)
             end
             """
         )
@@ -99,9 +95,9 @@ class Event:
         immediately.  Otherwise, block until another task calls
         set() to set the flag to true, then return True.
         """
-        if await self._wait_script([self.namespace]):
+        token = uuid.uuid4().hex
+        if await self._wait_script([self.namespace], [token]):
             return True
-        # token: str = await self.current_time  # type: ignore
         try:
             await self.client.blpop(self.waiter_pop_key)
             return True
@@ -109,7 +105,7 @@ class Event:
             err = None
             while True:
                 try:
-                    await self._cancelwait_script([self.namespace])  # 别在这cancel
+                    await self._cancelwait_script([self.namespace], [token])  # must cleanup after cancellation
                     break
                 except asyncio.CancelledError as e:
                     err = e
