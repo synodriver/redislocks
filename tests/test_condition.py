@@ -372,3 +372,7 @@ class TestConditionResp3(IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.cond1.reset()
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

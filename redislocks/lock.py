@@ -9,8 +9,6 @@ from redis.asyncio import Redis
 
 from redislocks.exceptions import NotAvailable
 
-
-# value=1的信号量当锁
 class Lock:
     """
     Redis中可能存在的key: Namespace:AVAILABLE list 存放全部可用的token，有self._value个
@@ -23,11 +21,12 @@ class Lock:
     def __init__(
         self,
         client: Optional[Redis] = None,
-        namespace: str = "LOCK",  # 区分不同的锁
+        namespace: str = "SEMAPHORE",  # 区分不同的锁
         stale_client_timeout: Optional[float] = None,
         blocking: bool = True,
     ):
         """
+
         :param client: redis client
         :param namespace: lock的命名空间，相同的视为同一把锁，使用相同的redis key
         :param stale_client_timeout:
@@ -127,11 +126,14 @@ class Lock:
         try:
             for token, locked_at in (
                 await self.client.hgetall(self.grabbed_key)
-            ).items():
+            ).items():  # 这里还需要帮其他客户端释放，因为其他client可能不在了
                 timed_out_at = float(locked_at) + self.stale_client_timeout
                 if timed_out_at < float(await self.current_time):
                     await self.signal(token)
-                    self._local_tokens.remove(token)
+                    try:
+                        self._local_tokens.remove(token)
+                    except ValueError:
+                        pass
         finally:
             await self.client.delete(self.check_release_locks_key)
 
@@ -143,21 +145,24 @@ class Lock:
         return len(self._local_tokens)
 
     async def has_token(self) -> bool:
-        """当前信号量拥有至少一个token时返回True"""
+        """当前锁拥有至少一个token时返回True"""
         for t in self._local_tokens:
             if await self._is_locked(t):
                 return True
         return False
 
     async def locked(self) -> bool:
-        """如果信号量不能被立刻获取返回True"""
+        """如果锁不能被立刻获取返回True"""
         grabbed: int = await self.client.hlen(self.grabbed_key)  # type: ignore
         return True if grabbed == self._value else False
 
     async def release(self):
-        if not await self.has_token():
-            return False
-        return await self.signal(self._local_tokens.pop())
+        if self._local_tokens:
+            token = self._local_tokens[0]
+            if await self._is_locked(token):
+                self._local_tokens.pop(0)
+                return await self.signal(token)
+        return False
 
     async def reset(self):
         await self._init()
@@ -191,7 +196,7 @@ class Lock:
 
     @property
     def check_release_locks_key(self):
-        return self._get_and_set_key("_release_locks_ley", "RELEASE_LOCKS")
+        return self._get_and_set_key("_release_locks_key", "RELEASE_LOCKS")
 
     def _get_and_set_key(self, key_name, namespace_suffix):
         if not hasattr(self, key_name):
@@ -213,44 +218,8 @@ class Lock:
 
     async def __aenter__(self):
         await self.acquire()
+        return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self.release()
         return True if exc_type is None else False
-
-
-class Single:
-    def __init__(
-        self,
-        client: Optional[Redis] = None,
-        namespace: str = "SINGLE",
-        timeout: Optional[int] = None,
-    ):
-        """
-
-        :param client: redis client
-        :param namespace: lock name in redis
-        :param timeout: ms
-        """
-        self.client = client
-        self.namespace = namespace
-        self.timeout = timeout  # ms
-
-        self._acquired = False
-
-    async def acquire(self):
-        """
-
-        :return: False的话，已经有别的client管这事了，直接返回就是
-        """
-        kw = {}
-        if self.timeout is not None:
-            kw["px"] = self.timeout
-        if await self.client.set(self.namespace, "1", nx=True, **kw):
-            self._acquired = True
-            return True
-        return False
-
-    async def release(self):
-        if self._acquired:
-            await self.client.delete(self.namespace)

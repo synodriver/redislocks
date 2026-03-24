@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import uuid
 from typing import Dict, Optional
 
 from redis.asyncio import Redis
@@ -34,37 +35,13 @@ class Condition:
         self.namespace = namespace
         self.waiter_key = self.get_namespaced_key("WAITER")
         self.pubsub_key = self.get_namespaced_key("PUBSUB")
-        # self.waiter_pop_key = self.get_namespaced_key("WAITERPOP")
 
         self._waiters = {}  # type: Dict[str, asyncio.Future]
-        # self._wait_script = self.client.register_script("""
-        # local namespace = KEYS[1]
-        # local waiter_key = namespace .. ":WAITER"
-        # local waiter_pop_key = namespace .. ":WAITERPOP"
-        #
-        # local time = redis.call("TIME")
-        # local timestring = time[1] ..".".. time[2] -- string
-        #
-        # redis.call("RPUSH", waiter_key, timestring)
-        # """)
-        # self._cancelwait_script = self.client.register_script(
-        #     """
-        # local namespace = KEYS[1]
-        # local token = KEYS[2]
-        # local waiter_key = namespace .. ":WAITER"
-        # local waiter_pop_key = namespace .. ":WAITERPOP"
-        #
-        # if redis.call("LREM", waiter_key, 1, token)==0 then
-        #     return redis.call("LREM", waiter_pop_key, 1, token)
-        # else
-        #     return 1
-        # end
-        # """
-        # )
+        # Bug fix #5: use ARGV[1] for parameter n instead of KEYS[2]
         self._notify_script = self.client.register_script(
             """
         local namespace = KEYS[1]
-        local n = KEYS[2] -- push times
+        local n = ARGV[1] -- push times
         local waiter_key = namespace .. ":WAITER"
         local pubsub_key = namespace .. ":PUBSUB"
         
@@ -104,37 +81,54 @@ class Condition:
                     token = ensure_str(event["data"])
                     if token in self._waiters:
                         waiter = self._waiters[token]
-                        waiter.set_result(None)
+                        # Bug fix #4: check if future is already done before
+                        # setting result, otherwise InvalidStateError crashes
+                        # this listener task and all future notifications break
+                        if not waiter.done():
+                            waiter.set_result(None)
 
     async def wait(self):
-        if not await self.locked():
+        if not await self._lock.has_token():
             raise RuntimeError("cannot wait on un-acquired lock")
         # 这里不用担心被其他进程干扰，锁已经由本进程锁定
         fut = asyncio.get_running_loop().create_future()
+        # Bug fix #3: add uuid to token to guarantee uniqueness even when
+        # multiple waiters call wait() at the same Redis TIME microsecond
+        token: str = f"{await self.current_time}:{uuid.uuid4().hex}"  # type: ignore
+        # Bug fix #1: register waiter in local dict AND push to Redis BEFORE
+        # releasing the lock. This prevents a race where another task acquires
+        # the lock and calls notify() before we've registered, causing a lost
+        # wakeup.
+        self._waiters[token] = fut
+        await self.client.rpush(self.waiter_key, token)
         await self.release()
-        token: str = await self.current_time  # type: ignore
         try:
             try:
-                self._waiters[token] = fut
-                await self.client.rpush(self.waiter_key, token)
                 try:
                     await fut
                     return True
                 finally:
-                    del self._waiters[token]
-                # await self.client.rpush(self.waiter_key, token)
-                # await self.client.blpop(self.waiter_pop_key) # fixme pop到别人的token怎么办
-                # return True
+                    self._waiters.pop(token, None)
             except asyncio.CancelledError:
                 err = None  # fixme 这里也可能浪费notify  fut完成而被cancel,或者未完成而被cancel，正好错过一次pub
                 while True:
                     try:
-                        await self.client.lrem(
+                        removed = await self.client.lrem(
                             self.waiter_key, 1, token
                         )  # notify就是pub个东西 后台有task pubsub
                         break
                     except asyncio.CancelledError as e:
                         err = e
+                if removed == 0:
+                    # 如果 LREM 返回 0，说明 token 已经被 notify 弹走了。
+                    # 但是我们被取消了，没人会处理这个信号。
+                    # 必须把这次机会“转让”给下一个人。
+                    while True:
+                        try:
+                            await self._notify(1)
+                            break
+                        except asyncio.CancelledError as e:
+                            err = e
                 if err is not None:
                     try:
                         raise err
@@ -221,12 +215,12 @@ class Condition:
         wait() call until it can reacquire the lock. Since notify() does
         not release the lock, its caller should.
         """
-        if not await self.locked():
+        if not await self._lock.has_token():
             raise RuntimeError("cannot notify on un-acquired lock")
         await self._notify(n)
 
     async def _notify(self, n):
-        await self._notify_script([self.namespace, n])
+        await self._notify_script(keys=[self.namespace], args=[n])
 
     async def notify_all(self):
         """Wake up all tasks waiting on this condition. This method acts
