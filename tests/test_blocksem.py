@@ -1,16 +1,16 @@
 """
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
+
 import asyncio
 import os
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 
 from dotenv import load_dotenv
 from redis.asyncio import Redis
 
 from redislocks import NotAvailable, Semaphore
-
-from pathlib import Path
 
 load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 
@@ -156,7 +156,7 @@ class TestSem(IsolatedAsyncioTestCase):
         await sem.release_stale_locks()
         self.assertEqual(len(sem._local_tokens), 0)
         await sem2.release_stale_locks()
-        self.assertEqual(len(sem2._local_tokens), 1) # 释放了个寂寞 fixme is this ok?
+        self.assertEqual(len(sem2._local_tokens), 1)  # 释放了个寂寞 fixme is this ok?
         self.assertEqual(await sem.available_count, 2)
         self.assertEqual(await sem2.available_count, 2)
         await sem.reset()

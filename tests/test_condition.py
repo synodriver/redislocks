@@ -2,16 +2,16 @@
 """
 Copyright (c) 2008-2024 synodriver <diguohuangjiajinweijun@gmail.com>
 """
+
 import asyncio
 import os
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 
 from dotenv import load_dotenv
 from redis.asyncio import Redis
 
 from redislocks.condition import Condition
-
-from pathlib import Path
 
 load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 
@@ -373,6 +373,8 @@ class TestConditionResp3(IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.cond1.reset()
 
+
 if __name__ == "__main__":
     import unittest
+
     unittest.main()

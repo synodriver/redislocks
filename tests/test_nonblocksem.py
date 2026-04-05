@@ -1,15 +1,15 @@
 """
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
+
 import os
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 
 from dotenv import load_dotenv
 from redis.asyncio import Redis
 
 from redislocks import NotAvailable, Semaphore
-
-from pathlib import Path
 
 load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 

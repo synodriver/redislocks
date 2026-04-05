@@ -1,6 +1,7 @@
 """
 Copyright (c) 2008-2023 synodriver <diguohuangjiajinweijun@gmail.com>
 """
+
 from pathlib import Path
 
 _current_dir = Path(__file__).resolve().parent

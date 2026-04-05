@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import os
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 
 from dotenv import load_dotenv
 from redis.asyncio import Redis
 
 from redislocks.event import Event
-
-from pathlib import Path
 
 load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 
@@ -262,6 +261,8 @@ class TestEventResp3(IsolatedAsyncioTestCase):
         await asyncio.sleep(0.5)
         self.assertEqual(ret, 1)
 
+
 if __name__ == "__main__":
     import unittest
+
     unittest.main()

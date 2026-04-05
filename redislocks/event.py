@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
-from typing import Optional
 import uuid
+from typing import Optional
 
 from redis.asyncio import Redis
 
@@ -26,8 +26,7 @@ class Event:
         self.waiter_key = self.get_namespaced_key("WAITER")
         self.waiter_pop_key = self.get_namespaced_key("WAITERPOP")
 
-        self._wait_script = self.client.register_script(
-            """
+        self._wait_script = self.client.register_script("""
         local namespace = KEYS[1]
         local token = ARGV[1]
         local set_key = namespace .. ":SET"
@@ -38,10 +37,8 @@ class Event:
         end
         redis.call("RPUSH", waiter_key, token)
         return 0
-        """
-        )
-        self._set_script = self.client.register_script(
-            """
+        """)
+        self._set_script = self.client.register_script("""
             local namespace = KEYS[1]
             local set_key = namespace .. ":SET"
             local waiter_key = namespace .. ":WAITER"
@@ -56,10 +53,8 @@ class Event:
                     redis.call("RPUSH", waiter_pop_key, token)
                 end
             end
-            """
-        )
-        self._cancelwait_script = self.client.register_script(
-            """
+            """)
+        self._cancelwait_script = self.client.register_script("""
             local namespace = KEYS[1]
             local token = ARGV[1]
             local waiter_key = namespace .. ":WAITER"
@@ -68,8 +63,7 @@ class Event:
             if redis.call("LREM", waiter_key, 1, token) == 0 then
                 redis.call("LREM", waiter_pop_key, 1, token)
             end
-            """
-        )
+            """)
 
     async def is_set(self) -> bool:
         """Return True if and only if the internal redis flag exists."""
@@ -105,7 +99,9 @@ class Event:
             err = None
             while True:
                 try:
-                    await self._cancelwait_script([self.namespace], [token])  # must cleanup after cancellation
+                    await self._cancelwait_script(
+                        [self.namespace], [token]
+                    )  # must cleanup after cancellation
                     break
                 except asyncio.CancelledError as e:
                     err = e

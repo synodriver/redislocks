@@ -2,9 +2,11 @@
 """
 Copyright (c) 2008-2024 synodriver <diguohuangjiajinweijun@gmail.com>
 """
+
 import asyncio
 import os
 import unittest
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 
 from dotenv import load_dotenv
@@ -12,8 +14,6 @@ from redis.asyncio import Redis
 
 from redislocks.queue import BroadcastQueue, GroupStream, Queue, Stream
 from redislocks.utils import ensure_str
-
-from pathlib import Path
 
 load_dotenv(str(Path(__file__).parent.resolve() / ".env"))
 

@@ -38,8 +38,7 @@ class Condition:
 
         self._waiters = {}  # type: Dict[str, asyncio.Future]
         # Bug fix #5: use ARGV[1] for parameter n instead of KEYS[2]
-        self._notify_script = self.client.register_script(
-            """
+        self._notify_script = self.client.register_script("""
         local namespace = KEYS[1]
         local n = ARGV[1] -- push times
         local waiter_key = namespace .. ":WAITER"
@@ -53,8 +52,7 @@ class Condition:
                 break
             end
         end
-        """
-        )
+        """)
         self._listen_task = asyncio.create_task(self._listen_events())
 
     async def __aenter__(self):
